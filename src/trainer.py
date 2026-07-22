@@ -9,6 +9,7 @@ import torch.distributed as dist
 from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.optim import AdamW
 from torch.optim.lr_scheduler import SequentialLR, LinearLR, CosineAnnealingLR
+from torch.optim.swa_utils import AveragedModel, SWALR, update_bn
 from torch.utils.data.distributed import DistributedSampler
 from tqdm import tqdm
 import wandb
@@ -159,6 +160,8 @@ def run_training(cfg: Config):
         crop_bbox=cfg.data.crop_bbox,
         is_distributed=True,
         num_workers=cfg.data.num_workers,
+        mixup_alpha=cfg.train.mixup_alpha,
+        target_noise=cfg.data.target_noise,
     )
 
     model = CowBCSModel(
@@ -189,6 +192,11 @@ def run_training(cfg: Config):
     scaler = torch.amp.GradScaler("cuda")
     early_stopping = EarlyStopping(patience=cfg.train.patience)
 
+    # 🔥 Инициализация SWA
+    if cfg.train.use_swa:
+        swa_model = AveragedModel(model)
+        swa_scheduler = SWALR(optimizer, swa_lr=cfg.train.swa_lr)
+
     best_val_mae = float("inf")
 
     if is_master:
@@ -206,7 +214,13 @@ def run_training(cfg: Config):
         )
         val_loss, val_metrics = validate_epoch(model, val_loader, criterion, device)
 
-        scheduler.step()
+        # 🔥 Шаг планировщика (обычный или SWA)
+        if cfg.train.use_swa and epoch >= cfg.train.swa_start:
+            swa_model.update_parameters(model)
+            swa_scheduler.step()
+        else:
+            scheduler.step()
+
         early_stopping(val_loss)
 
         if is_master and val_metrics is not None:
@@ -247,6 +261,18 @@ def run_training(cfg: Config):
             if is_master:
                 print("🛑 Сработал Early Stopping! Обучение остановлено.")
             break
+
+    # 🔥 Финализация SWA (обновление BatchNorm)
+    if cfg.train.use_swa:
+        if is_master:
+            print("🔄 Финализация SWA: Обновление статистики BatchNorm...")
+        update_bn(train_loader, swa_model, device=device)
+        
+        # Валидация SWA модели
+        val_loss_swa, val_metrics_swa = validate_epoch(swa_model, val_loader, criterion, device)
+        if is_master and val_metrics_swa:
+            print(f"📊 SWA Metrics | MAE: {val_metrics_swa['mae']:.3f} (Extr: {val_metrics_swa['extreme_mae']:.3f})")
+            torch.save(swa_model.module.state_dict(), SAVE_DIR / "swa_bcs_model.pt")
 
     if is_master and cfg.train.use_wandb:
         wandb.finish()

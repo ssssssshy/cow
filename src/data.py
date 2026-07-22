@@ -89,6 +89,7 @@ class CowBCSDataset(Dataset):
         bbox_padding: float = 0.1,
         transform: Optional[A.Compose] = None,
         class_to_bcs: Optional[Dict[int, float]] = None,
+        target_noise: float = 0.0,
     ):
         self.data_dir = Path(data_dir)
         self.split = split
@@ -97,12 +98,14 @@ class CowBCSDataset(Dataset):
         self.bbox_padding = bbox_padding
         self.transform = transform
         self.class_to_bcs = class_to_bcs or DEFAULT_CLASS_TO_BCS
+        self.target_noise = target_noise
 
         self.img_dir = self.data_dir / "images" / split
         self.lbl_dir = self.data_dir / "labels" / split
         self.samples = self._load_samples()
 
     def _load_samples(self) -> List[Dict]:
+        # ... (rest of the method unchanged) ...
         samples = []
         img_extensions = ("*.webp", "*.jpg", "*.jpeg", "*.png")
         img_files: List[Path] = []
@@ -168,7 +171,16 @@ class CowBCSDataset(Dataset):
         if not isinstance(image_out, torch.Tensor):
             image_out = torch.from_numpy(image_out).permute(2, 0, 1).float() / 255.0
 
-        bcs_target = torch.tensor(sample["bcs_target"], dtype=torch.float32)
+        bcs_target_val = sample["bcs_target"]
+        
+        # Добавляем Гауссов шум к таргету для защиты от шума разметки (только при обучении)
+        if self.split == "train" and self.target_noise > 0:
+            import numpy as np
+            bcs_target_val += np.random.normal(0, self.target_noise)
+            # Ограничиваем таргет физическими рамками шкалы BCS
+            bcs_target_val = np.clip(bcs_target_val, 1.0, 5.0)
+
+        bcs_target = torch.tensor(bcs_target_val, dtype=torch.float32)
         class_id = sample["class_id"]
         return image_out, bcs_target, class_id
 
@@ -274,6 +286,7 @@ def get_dataloaders(
     is_distributed=False,
     num_workers=4,
     mixup_alpha=0.2,  # Параметр для контроля интенсивности Mixup
+    target_noise=0.0,
 ):
     train_tf, val_tf = get_transforms(img_size=img_size)
 
@@ -283,6 +296,7 @@ def get_dataloaders(
         img_size=img_size,
         crop_bbox=crop_bbox,
         transform=train_tf,
+        target_noise=target_noise,
     )
     val_dataset = CowBCSDataset(
         data_dir=data_dir,

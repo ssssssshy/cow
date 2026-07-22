@@ -11,6 +11,7 @@ class DataConfig:
     img_size: List[int] = field(default_factory=lambda: [384, 384])
     crop_bbox: bool = True
     num_workers: int = 4
+    target_noise: float = 0.05  # Интенсивность зашумления меток для защиты от шума
 
 
 @dataclass
@@ -31,6 +32,12 @@ class TrainConfig:
     warmup_epochs: int = 3
     patience: int = 7
     save_dir: str = "checkpoints"
+    mixup_alpha: float = 0.2
+
+    # --- Настройки SWA (Stochastic Weight Averaging) ---
+    use_swa: bool = True
+    swa_start: int = 35
+    swa_lr: float = 5e-5
 
     # --- Настройки трекинга ---
     use_wandb: bool = False

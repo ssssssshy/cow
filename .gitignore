@@ -14,3 +14,4 @@ data/
 
 .venv
 convnext_2xGPU_baseline purpul.pt
+new.txt
