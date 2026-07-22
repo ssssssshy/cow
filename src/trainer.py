@@ -1,6 +1,7 @@
 import os
 import time
 from pathlib import Path
+from typing import Any, cast
 
 import torch
 import torch.nn as nn
@@ -10,7 +11,8 @@ from torch.optim import AdamW
 from torch.optim.lr_scheduler import SequentialLR, LinearLR, CosineAnnealingLR
 from torch.utils.data.distributed import DistributedSampler
 from tqdm import tqdm
-from typing import Any, cast
+import wandb
+from omegaconf import OmegaConf
 
 from src.config import Config
 from src.data import get_dataloaders
@@ -18,8 +20,6 @@ from src.losses import get_loss_function
 from src.metrics import compute_all_metrics, compute_mae
 from src.models import CowBCSModel
 from src.utils import EarlyStopping
-import wandb
-from omegaconf import OmegaConf
 
 
 def setup_ddp():
@@ -94,6 +94,11 @@ def validate_epoch(model, loader, criterion, device):
         all_preds.append(preds)
         all_targets.append(targets)
 
+    # 🔥 Синхронизируем running_loss и total_samples между всеми GPU для честного Val Loss
+    stats_tensor = torch.tensor([running_loss, float(total_samples)], device=device)
+    dist.all_reduce(stats_tensor, op=dist.ReduceOp.SUM)
+    global_val_loss = stats_tensor[0].item() / stats_tensor[1].item()
+
     concat_preds = torch.cat(all_preds, dim=0)
     concat_targets = torch.cat(all_targets, dim=0)
 
@@ -110,26 +115,22 @@ def validate_epoch(model, loader, criterion, device):
     final_preds = torch.cat(gathered_preds, dim=0)
     final_targets = torch.cat(gathered_targets, dim=0)
 
-    val_loss = running_loss / total_samples
-
     if is_master:
         val_metrics = compute_all_metrics(final_preds, final_targets)
 
-        # 🔥 ДОБАВЛЕНО: Изолированный расчет MAE для экстремальных классов
-        # Задаем пороги: худые (<= 2.50) и жирные (>= 3.50)
+        # 🔥 Расчет MAE только для экстремальных классов (<= 2.50 или >= 3.50)
         extreme_mask = (final_targets <= 2.50) | (final_targets >= 3.50)
 
         if extreme_mask.any():
             extreme_preds = final_preds[extreme_mask]
             extreme_targets = final_targets[extreme_mask]
-            # Вычисляем MAE только по отфильтрованным тензорам
             val_metrics["extreme_mae"] = compute_mae(extreme_preds, extreme_targets)
         else:
             val_metrics["extreme_mae"] = 0.0
     else:
         val_metrics = None
 
-    return val_loss, val_metrics
+    return global_val_loss, val_metrics
 
 
 def run_training(cfg: Config):
@@ -141,12 +142,10 @@ def run_training(cfg: Config):
     if is_master:
         SAVE_DIR.mkdir(exist_ok=True, parents=True)
 
-        # 🔥 Инициализация WandB только на нулевом GPU
         if cfg.train.use_wandb:
             wandb.init(
                 project=cfg.train.wandb_project,
                 name=cfg.train.wandb_name,
-                # Явно указываем Pylance, что ключи — это строки
                 config=cast(dict[str, Any], OmegaConf.to_container(cfg, resolve=True)),
             )
 
@@ -156,7 +155,7 @@ def run_training(cfg: Config):
         img_size=(
             cfg.data.img_size[0],
             cfg.data.img_size[1],
-        ),  # <-- Явно отдаем 2 элемента
+        ),
         crop_bbox=cfg.data.crop_bbox,
         is_distributed=True,
         num_workers=cfg.data.num_workers,
@@ -166,6 +165,7 @@ def run_training(cfg: Config):
         model_name=cfg.model.name,
         pretrained=cfg.model.pretrained,
         drop_rate=cfg.model.drop_rate,
+        init_bias=cfg.model.init_bias,
     ).to(device)
 
     model = DDP(model, device_ids=[local_rank], output_device=local_rank)
@@ -215,7 +215,6 @@ def run_training(cfg: Config):
             extreme_mae = val_metrics.get("extreme_mae", 0.0)
             acc_025 = val_metrics["acc_tol_0.25"]
 
-            # 🔥 Отправляем метрики в W&B
             if cfg.train.use_wandb:
                 wandb.log(
                     {
@@ -223,7 +222,7 @@ def run_training(cfg: Config):
                         "train/mae": train_mae,
                         "val/loss": val_loss,
                         "val/mae": val_mae,
-                        "val/extreme_mae": extreme_mae,  # 🔥 Логируем метрику экстремальных коров
+                        "val/extreme_mae": extreme_mae,
                         "val/acc_0.25": acc_025,
                         "val/acc_0.50": val_metrics["acc_tol_0.50"],
                         "lr": optimizer.param_groups[0]["lr"],
@@ -235,11 +234,9 @@ def run_training(cfg: Config):
             if is_best:
                 best_val_mae = val_mae
                 torch.save(model.module.state_dict(), SAVE_DIR / "best_bcs_model.pt")
-                # 🔥 Сохраняем чекпоинт в облако W&B
                 if cfg.train.use_wandb:
                     wandb.save(str(SAVE_DIR / "best_bcs_model.pt"))
 
-            # 🔥 Обновлен вывод в консоль для наглядности
             print(
                 f"Epoch [{epoch:02d}/{cfg.train.epochs:02d}] ({elapsed:.1f}s) | "
                 f"Train Loss: {train_loss:.4f} MAE: {train_mae:.3f} | "
@@ -251,7 +248,6 @@ def run_training(cfg: Config):
                 print("🛑 Сработал Early Stopping! Обучение остановлено.")
             break
 
-    # 🔥 Закрываем сессию WandB
     if is_master and cfg.train.use_wandb:
         wandb.finish()
 
