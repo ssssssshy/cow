@@ -22,3 +22,4 @@ train:
   use_wandb: true
   wandb_project: "cow_bcs"
   wandb_name: "run_02_wing_loss_reg"
+  mixup_alpha: 0.0

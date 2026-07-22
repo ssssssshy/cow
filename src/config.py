@@ -32,7 +32,7 @@ class TrainConfig:
     warmup_epochs: int = 3
     patience: int = 7
     save_dir: str = "checkpoints"
-    mixup_alpha: float = 0.2
+    mixup_alpha: float = 0.0
 
     # --- Настройки SWA (Stochastic Weight Averaging) ---
     use_swa: bool = True
