@@ -61,9 +61,10 @@ def plot_analysis(preds: np.ndarray, targets: np.ndarray, save_dir: Path):
     save_dir.mkdir(exist_ok=True, parents=True)
     sns.set_theme(style="whitegrid")
 
-    # 1. Scatter Plot
+    # 1. Scatter Plot (Факт vs Предсказание)
     plt.figure(figsize=(8, 8))
     plt.scatter(targets, preds, alpha=0.5, color="blue", edgecolor="k")
+
     min_val, max_val = 1.0, 5.0
     plt.plot(
         [min_val, max_val],
@@ -72,6 +73,7 @@ def plot_analysis(preds: np.ndarray, targets: np.ndarray, save_dir: Path):
         lw=2,
         label="Идеальное предсказание",
     )
+
     plt.xlim(min_val, max_val)
     plt.ylim(min_val, max_val)
     plt.xlabel("Фактический BCS")
@@ -81,14 +83,21 @@ def plot_analysis(preds: np.ndarray, targets: np.ndarray, save_dir: Path):
     plt.savefig(save_dir / "scatter_plot.png", dpi=300, bbox_inches="tight")
     plt.close()
 
-    # 2. Матрица ошибок
-    step = 0.25
-    rounded_preds = np.round(preds / step) * step
-    rounded_targets = np.round(targets / step) * step
-    classes = np.arange(1.0, 5.25, 0.25)
-    str_classes = [f"{c:.2f}" for c in classes]
+    # 2. Матрица ошибок (Confusion Matrix)
+    # Превращаем float-значения (1.0, 1.25 ...) в целые индексы от 0 до 16,
+    # так как sklearn категорически не принимает float для confusion_matrix.
+    def bcs_to_idx(arr):
+        return np.clip(np.round((arr - 1.0) / 0.25), 0, 16).astype(int)
 
-    cm = confusion_matrix(rounded_targets, rounded_preds, labels=classes)
+    int_preds = bcs_to_idx(preds)
+    int_targets = bcs_to_idx(targets)
+
+    num_classes = 17
+    labels = np.arange(num_classes)
+    str_classes = [f"{(1.0 + i * 0.25):.2f}" for i in range(num_classes)]
+
+    cm = confusion_matrix(int_targets, int_preds, labels=labels)
+
     plt.figure(figsize=(12, 10))
     sns.heatmap(
         cm,
@@ -118,7 +127,7 @@ def plot_analysis(preds: np.ndarray, targets: np.ndarray, save_dir: Path):
     plt.savefig(save_dir / "error_distribution.png", dpi=300, bbox_inches="tight")
     plt.close()
 
-    print(f"✅ Аналитические графики сохранены в: {save_dir}")
+    print(f"✅ Графики успешно сохранены в папку: {save_dir}")
 
 
 def mine_and_plot_hard_examples(
