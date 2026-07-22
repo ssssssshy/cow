@@ -32,6 +32,11 @@ class TrainConfig:
     patience: int = 7
     save_dir: str = "checkpoints"
 
+    # --- Настройки трекинга ---
+    use_wandb: bool = False
+    wandb_project: str = "cow_bcs"
+    wandb_name: str = "run_01_baseline"
+
 
 @dataclass
 class Config:
@@ -58,9 +63,11 @@ def load_config(config_path: str = "config/train.yaml") -> Config:
 
     # 2. Читаем YAML
     yaml_cfg = OmegaConf.load(path)
-
-    # 3. Мержим YAML поверх базового конфига (YAML в приоритете)
     merged_cfg = OmegaConf.merge(base_cfg, yaml_cfg)
+
+    # Считываем аргументы из терминала (Kaggle) и применяем их поверх YAML
+    cli_cfg = OmegaConf.from_cli()
+    merged_cfg = OmegaConf.merge(merged_cfg, cli_cfg)
 
     return cast(Config, merged_cfg)
 

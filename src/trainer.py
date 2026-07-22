@@ -10,6 +10,7 @@ from torch.optim import AdamW
 from torch.optim.lr_scheduler import SequentialLR, LinearLR, CosineAnnealingLR
 from torch.utils.data.distributed import DistributedSampler
 from tqdm import tqdm
+from typing import Any, cast
 
 from src.config import Config
 from src.data import get_dataloaders
@@ -17,6 +18,8 @@ from src.losses import get_loss_function
 from src.metrics import compute_all_metrics, compute_mae
 from src.models import CowBCSModel
 from src.utils import EarlyStopping
+import wandb
+from omegaconf import OmegaConf
 
 
 def setup_ddp():
@@ -114,7 +117,6 @@ def validate_epoch(model, loader, criterion, device):
 
 
 def run_training(cfg: Config):
-    """Оркестратор процесса обучения."""
     local_rank = setup_ddp()
     device = torch.device(f"cuda:{local_rank}")
     is_master = local_rank == 0
@@ -122,6 +124,15 @@ def run_training(cfg: Config):
     SAVE_DIR = Path(cfg.train.save_dir)
     if is_master:
         SAVE_DIR.mkdir(exist_ok=True, parents=True)
+
+        # 🔥 Инициализация WandB только на нулевом GPU
+        if cfg.train.use_wandb:
+            wandb.init(
+                project=cfg.train.wandb_project,
+                name=cfg.train.wandb_name,
+                # Явно указываем Pylance, что ключи — это строки
+                config=cast(dict[str, Any], OmegaConf.to_container(cfg, resolve=True)),
+            )
 
     train_loader, val_loader = get_dataloaders(
         data_dir=cfg.data.data_dir,
@@ -188,10 +199,28 @@ def run_training(cfg: Config):
             val_mae = val_metrics["mae"]
             acc_025 = val_metrics["acc_tol_0.25"]
 
+            # 🔥 Отправляем метрики в W&B
+            if cfg.train.use_wandb:
+                wandb.log(
+                    {
+                        "train/loss": train_loss,
+                        "train/mae": train_mae,
+                        "val/loss": val_loss,
+                        "val/mae": val_mae,
+                        "val/acc_0.25": acc_025,
+                        "val/acc_0.50": val_metrics["acc_tol_0.50"],
+                        "lr": optimizer.param_groups[0]["lr"],
+                        "epoch": epoch,
+                    }
+                )
+
             is_best = val_mae < best_val_mae
             if is_best:
                 best_val_mae = val_mae
                 torch.save(model.module.state_dict(), SAVE_DIR / "best_bcs_model.pt")
+                # 🔥 Сохраняем чекпоинт в облако W&B
+                if cfg.train.use_wandb:
+                    wandb.save(str(SAVE_DIR / "best_bcs_model.pt"))
 
             print(
                 f"Epoch [{epoch:02d}/{cfg.train.epochs:02d}] ({elapsed:.1f}s) | "
@@ -203,5 +232,9 @@ def run_training(cfg: Config):
             if is_master:
                 print("🛑 Сработал Early Stopping! Обучение остановлено.")
             break
+
+    # 🔥 Закрываем сессию WandB
+    if is_master and cfg.train.use_wandb:
+        wandb.finish()
 
     cleanup_ddp()
