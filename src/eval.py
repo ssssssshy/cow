@@ -1,5 +1,7 @@
 from pathlib import Path
 
+import cv2
+import pandas as pd
 import matplotlib.pyplot as plt
 import numpy as np
 import seaborn as sns
@@ -17,7 +19,8 @@ def load_model(cfg, model_path, device):
     """Загружает модель, очищая ключи DDP (префикс 'module.')."""
     model = CowBCSModel(
         model_name=cfg.model.name,
-        pretrained=False,  # Веса мы загрузим свои
+        pretrained=False,
+        init_bias=cfg.model.init_bias,  # Не забываем про bias
     ).to(device)
 
     if not Path(model_path).exists():
@@ -25,7 +28,6 @@ def load_model(cfg, model_path, device):
 
     state_dict = torch.load(model_path, map_location=device, weights_only=True)
 
-    # Очищаем префикс "module." от DistributedDataParallel
     clean_state_dict = {}
     for k, v in state_dict.items():
         name = k[7:] if k.startswith("module.") else k
@@ -44,10 +46,12 @@ def get_predictions(model, loader, device):
 
     for images, targets, _ in tqdm(loader, desc="Оценка модели"):
         images = images.to(device)
-        preds = model(images)
+        with torch.amp.autocast(device_type="cuda"):
+            preds = model(images)
 
-        all_preds.extend(preds.cpu().numpy())
-        all_targets.extend(targets.numpy())
+        # Обязательно "плющим" тензоры, чтобы они точно были 1D массивами
+        all_preds.extend(preds.view(-1).cpu().numpy())
+        all_targets.extend(targets.view(-1).cpu().numpy())
 
     return np.array(all_preds), np.array(all_targets)
 
@@ -55,15 +59,11 @@ def get_predictions(model, loader, device):
 def plot_analysis(preds: np.ndarray, targets: np.ndarray, save_dir: Path):
     """Строит и сохраняет аналитические графики."""
     save_dir.mkdir(exist_ok=True, parents=True)
-
-    # Общие настройки графиков
     sns.set_theme(style="whitegrid")
 
-    # 1. Scatter Plot (Факт vs Предсказание)
+    # 1. Scatter Plot
     plt.figure(figsize=(8, 8))
     plt.scatter(targets, preds, alpha=0.5, color="blue", edgecolor="k")
-
-    # Идеальная линия предсказания y = x
     min_val, max_val = 1.0, 5.0
     plt.plot(
         [min_val, max_val],
@@ -72,7 +72,6 @@ def plot_analysis(preds: np.ndarray, targets: np.ndarray, save_dir: Path):
         lw=2,
         label="Идеальное предсказание",
     )
-
     plt.xlim(min_val, max_val)
     plt.ylim(min_val, max_val)
     plt.xlabel("Фактический BCS")
@@ -82,18 +81,14 @@ def plot_analysis(preds: np.ndarray, targets: np.ndarray, save_dir: Path):
     plt.savefig(save_dir / "scatter_plot.png", dpi=300, bbox_inches="tight")
     plt.close()
 
-    # 2. Матрица ошибок (Confusion Matrix)
-    # Округляем до ближайшего 0.25 для создания классов
+    # 2. Матрица ошибок
     step = 0.25
     rounded_preds = np.round(preds / step) * step
     rounded_targets = np.round(targets / step) * step
-
     classes = np.arange(1.0, 5.25, 0.25)
-    # Превращаем числа в красивые строки, например "2.75", для Seaborn
     str_classes = [f"{c:.2f}" for c in classes]
 
     cm = confusion_matrix(rounded_targets, rounded_preds, labels=classes)
-
     plt.figure(figsize=(12, 10))
     sns.heatmap(
         cm,
@@ -123,7 +118,73 @@ def plot_analysis(preds: np.ndarray, targets: np.ndarray, save_dir: Path):
     plt.savefig(save_dir / "error_distribution.png", dpi=300, bbox_inches="tight")
     plt.close()
 
-    print(f"✅ Графики успешно сохранены в папку: {save_dir}")
+    print(f"✅ Аналитические графики сохранены в: {save_dir}")
+
+
+def mine_and_plot_hard_examples(
+    preds: np.ndarray, targets: np.ndarray, dataset, save_dir: Path, top_k=50
+):
+    """Ищет примеры с наибольшей ошибкой, сохраняет их в CSV и рисует ТОП-16."""
+    errors = np.abs(preds - targets)
+
+    results = []
+    for idx in range(len(errors)):
+        # Берем метаданные из оригинального датасета (путь к картинке и т.д.)
+        sample_meta = dataset.samples[idx]
+        results.append(
+            {
+                "image_path": str(sample_meta["img_path"]),
+                "class_id": sample_meta["class_id"],
+                "true_bcs": targets[idx],
+                "pred_bcs": preds[idx],
+                "error": errors[idx],
+            }
+        )
+
+    # Сортируем по убыванию ошибки
+    df_hard = pd.DataFrame(results).sort_values(by="error", ascending=False).head(top_k)
+
+    # 1. Сохраняем в CSV
+    csv_path = save_dir / "hard_examples_report.csv"
+    df_hard.to_csv(csv_path, index=False)
+    print(f"✅ Отчет по ТОП-{top_k} сложным примерам сохранен в: {csv_path}")
+
+    # 2. Рисуем сетку картинок (ТОП-16)
+    num_to_plot = min(16, len(df_hard))
+    if num_to_plot == 0:
+        return
+
+    cols = 4
+    rows = (num_to_plot + cols - 1) // cols
+    fig, axes = plt.subplots(rows, cols, figsize=(16, 4 * rows))
+    axes = axes.flatten()
+
+    for i in range(num_to_plot):
+        row = df_hard.iloc[i]
+        img_path = row["image_path"]
+
+        image = cv2.imread(img_path)
+        if image is not None:
+            image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+            axes[i].imshow(image)
+        else:
+            axes[i].text(0.5, 0.5, "Image not found", ha="center", va="center")
+
+        axes[i].set_title(
+            f"True: {row['true_bcs']:.2f} | Pred: {row['pred_bcs']:.2f}\nErr: {row['error']:.2f}",
+            color="red" if row["error"] > 0.5 else "orange",
+            fontsize=10,
+        )
+        axes[i].axis("off")
+
+    for j in range(i + 1, len(axes)):
+        axes[j].axis("off")
+
+    plot_path = save_dir / "hard_examples_top16.png"
+    plt.tight_layout()
+    plt.savefig(plot_path, bbox_inches="tight", dpi=150)
+    plt.close()
+    print(f"📸 Сетка проблемных изображений сохранена в: {plot_path}")
 
 
 def main():
@@ -133,8 +194,9 @@ def main():
 
     model_path = Path(cfg.train.save_dir) / "best_bcs_model.pt"
     results_dir = Path("results")
+    results_dir.mkdir(exist_ok=True, parents=True)
 
-    # 1. Загрузка данных (Используем только Val, DDP выключен!)
+    # 1. Загрузка данных (Используем только Val, DDP выключен! Shuffle по умолчанию выключен)
     _, val_loader = get_dataloaders(
         data_dir=cfg.data.data_dir,
         batch_size=cfg.train.batch_size,
@@ -156,8 +218,14 @@ def main():
     for k, v in metrics.items():
         print(f"  - {k}: {v:.4f}")
 
-    # 5. Отрисовка графиков
+    # 5. Отрисовка базовых графиков (Матрица ошибок, гистограмма)
     plot_analysis(preds, targets, results_dir)
+
+    # 6. Анализ "Hard Examples" (Майнинг сложных примеров)
+    # Передаем val_loader.dataset, чтобы извлечь пути к оригинальным изображениям
+    mine_and_plot_hard_examples(
+        preds, targets, val_loader.dataset, results_dir, top_k=50
+    )
 
 
 if __name__ == "__main__":
