@@ -1,0 +1,21 @@
+data:
+  data_dir: "data/raw"
+  img_size: [384, 384]
+  crop_bbox: true
+  num_workers: 4
+
+model:
+  name: "convnext_small.fb_in22k_ft_in1k_384"
+  pretrained: true
+  drop_rate: 0.2
+  init_bias: 2.8
+
+train:
+  loss_name: "smooth_l1"
+  batch_size: 32     # Внимание: это Batch Size на ОДИН GPU в DDP!
+  epochs: 50
+  lr: 1e-4
+  weight_decay: 1e-2
+  warmup_epochs: 3
+  patience: 7
+  save_dir: "checkpoints"

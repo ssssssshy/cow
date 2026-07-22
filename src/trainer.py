@@ -15,6 +15,7 @@ from metrics import compute_all_metrics, compute_mae
 from models import CowBCSModel
 from torch.utils.data.distributed import DistributedSampler
 from utils import EarlyStopping
+from config import load_config
 
 
 def setup_ddp():
