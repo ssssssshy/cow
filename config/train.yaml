@@ -14,8 +14,8 @@ train:
   loss_name: "smooth_l1"
   batch_size: 32     # Внимание: это Batch Size на ОДИН GPU в DDP!
   epochs: 50
-  lr: 1e-4
-  weight_decay: 1e-2
+  lr: 1.0e-4
+  weight_decay: 5.0e-2
   warmup_epochs: 3
   patience: 7
   save_dir: "checkpoints"
