@@ -111,7 +111,23 @@ def validate_epoch(model, loader, criterion, device):
     final_targets = torch.cat(gathered_targets, dim=0)
 
     val_loss = running_loss / total_samples
-    val_metrics = compute_all_metrics(final_preds, final_targets) if is_master else None
+
+    if is_master:
+        val_metrics = compute_all_metrics(final_preds, final_targets)
+
+        # 🔥 ДОБАВЛЕНО: Изолированный расчет MAE для экстремальных классов
+        # Задаем пороги: худые (<= 2.50) и жирные (>= 3.50)
+        extreme_mask = (final_targets <= 2.50) | (final_targets >= 3.50)
+
+        if extreme_mask.any():
+            extreme_preds = final_preds[extreme_mask]
+            extreme_targets = final_targets[extreme_mask]
+            # Вычисляем MAE только по отфильтрованным тензорам
+            val_metrics["extreme_mae"] = compute_mae(extreme_preds, extreme_targets)
+        else:
+            val_metrics["extreme_mae"] = 0.0
+    else:
+        val_metrics = None
 
     return val_loss, val_metrics
 
@@ -196,6 +212,7 @@ def run_training(cfg: Config):
         if is_master and val_metrics is not None:
             elapsed = time.time() - start_time
             val_mae = val_metrics["mae"]
+            extreme_mae = val_metrics.get("extreme_mae", 0.0)
             acc_025 = val_metrics["acc_tol_0.25"]
 
             # 🔥 Отправляем метрики в W&B
@@ -206,6 +223,7 @@ def run_training(cfg: Config):
                         "train/mae": train_mae,
                         "val/loss": val_loss,
                         "val/mae": val_mae,
+                        "val/extreme_mae": extreme_mae,  # 🔥 Логируем метрику экстремальных коров
                         "val/acc_0.25": acc_025,
                         "val/acc_0.50": val_metrics["acc_tol_0.50"],
                         "lr": optimizer.param_groups[0]["lr"],
@@ -221,10 +239,11 @@ def run_training(cfg: Config):
                 if cfg.train.use_wandb:
                     wandb.save(str(SAVE_DIR / "best_bcs_model.pt"))
 
+            # 🔥 Обновлен вывод в консоль для наглядности
             print(
                 f"Epoch [{epoch:02d}/{cfg.train.epochs:02d}] ({elapsed:.1f}s) | "
                 f"Train Loss: {train_loss:.4f} MAE: {train_mae:.3f} | "
-                f"Val MAE: {val_mae:.3f} Acc(±0.25): {acc_025:.1f}% {'🔥 BEST' if is_best else ''}"
+                f"Val MAE: {val_mae:.3f} (Extr: {extreme_mae:.3f}) Acc(±0.25): {acc_025:.1f}% {'🔥 BEST' if is_best else ''}"
             )
 
         if early_stopping.early_stop:

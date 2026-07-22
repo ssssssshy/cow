@@ -66,6 +66,24 @@ class WeightedSmoothL1Loss(nn.Module):
         return loss
 
 
+class HuberLossWithDelta(nn.Module):
+    """
+    Huber Loss для регрессии, устойчивый к выбросам (шуму).
+    Комбинирует L1 (для больших ошибок) и L2 (для малых ошибок).
+    Использование малой дельты (например, 0.05) помогает игнорировать
+    значительные шумы в разметке.
+    """
+
+    def __init__(self, delta: float = 0.05, reduction: str = "mean"):
+        super().__init__()
+        self.delta = delta
+        self.reduction = reduction
+
+    def forward(self, preds: torch.Tensor, targets: torch.Tensor) -> torch.Tensor:
+        # Используем встроенную функцию PyTorch для Huber Loss
+        return F.huber_loss(preds, targets, reduction=self.reduction, delta=self.delta)
+
+
 class OrdinalRegressionLoss(nn.Module):
     """
     Ordinal Cross-Entropy Loss для задачи BCS.
@@ -99,11 +117,15 @@ class OrdinalRegressionLoss(nn.Module):
         return loss.sum(dim=1).mean()
 
 
-def get_loss_function(loss_name: str = "smooth_l1", beta: float = 0.1) -> nn.Module:
+def get_loss_function(
+    loss_name: str = "smooth_l1", beta: float = 0.1, huber_delta: float = 0.05
+) -> nn.Module:
     """Фабрика для удобного выбора Loss-функции."""
     loss_name = loss_name.lower()
     if loss_name == "smooth_l1":
         return nn.SmoothL1Loss(beta=beta)
+    elif loss_name == "huber":
+        return HuberLossWithDelta(delta=huber_delta)
     elif loss_name == "l1":
         return nn.L1Loss()
     elif loss_name == "mse":
@@ -112,6 +134,8 @@ def get_loss_function(loss_name: str = "smooth_l1", beta: float = 0.1) -> nn.Mod
         return WingLoss()
     elif loss_name == "weighted_smooth_l1":
         return WeightedSmoothL1Loss(beta=beta)
+    elif loss_name == "ordinal":
+        return OrdinalRegressionLoss()
     else:
         raise ValueError(f"Неизвестная функция потерь: {loss_name}")
 
@@ -123,6 +147,8 @@ if __name__ == "__main__":
 
     smooth_l1 = get_loss_function("smooth_l1")
     wing = get_loss_function("wing")
+    huber = get_loss_function("huber", huber_delta=0.05)
 
     print(f"Smooth L1 Loss : {smooth_l1(preds, targets).item():.4f}")
     print(f"Wing Loss      : {wing(preds, targets).item():.4f}")
+    print(f"Huber Loss     : {huber(preds, targets).item():.4f}")

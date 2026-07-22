@@ -11,7 +11,7 @@ model:
   init_bias: 2.88  # ИЗМЕНЕНО: Ставим точное среднее значение из твоей статистики
 
 train:
-  loss_name: "wing"   # ИЗМЕНЕНО: Переходим на Wing Loss!
+  loss_name: "huber"   # ИЗМЕНЕНО: Переходим на Wing Loss!
   batch_size: 16
   epochs: 50
   lr: 5.0e-5            # УМЕНЬШЕНО с 1e-4: Для Wing Loss нужен шаг поменьше
