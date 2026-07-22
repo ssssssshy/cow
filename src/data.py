@@ -7,6 +7,7 @@ from albumentations.pytorch import ToTensorV2
 import cv2
 import torch
 from torch.utils.data import DataLoader, Dataset, WeightedRandomSampler
+from torch.utils.data.distributed import DistributedSampler
 
 # --- 1. Маппинг классов в непрерывные значения BCS ---
 DEFAULT_CLASS_TO_BCS: Dict[int, float] = {
@@ -206,67 +207,61 @@ def get_dataloaders(
     batch_size: int = 16,
     img_size: Tuple[int, int] = (384, 384),
     crop_bbox: bool = True,
-    use_weighted_sampler: bool = True,
     num_workers: int = 4,
-    pin_memory: bool = True,
+    is_distributed: bool = False,
 ) -> Tuple[DataLoader, DataLoader]:
-    """Возвращает train_loader и val_loader."""
+
     train_tf, val_tf = get_transforms(img_size=img_size)
 
+    # ВАЖНО: Убедитесь, что датасет уже разделен по ID коровы, а не случайно[cite: 1].
     train_dataset = CowBCSDataset(
-        data_dir=data_dir,
+        data_dir,
         split="train",
         img_size=img_size,
         crop_bbox=crop_bbox,
         transform=train_tf,
     )
-
     val_dataset = CowBCSDataset(
-        data_dir=data_dir,
-        split="val",
-        img_size=img_size,
-        crop_bbox=crop_bbox,
-        transform=val_tf,
+        data_dir, split="val", img_size=img_size, crop_bbox=crop_bbox, transform=val_tf
     )
 
-    if use_weighted_sampler:
-        sampler = get_weighted_sampler(train_dataset)
-        train_loader = DataLoader(
-            train_dataset,
-            batch_size=batch_size,
-            sampler=sampler,
-            num_workers=num_workers,
-            pin_memory=pin_memory,
-            drop_last=True,
-        )
+    if is_distributed:
+        train_sampler = DistributedSampler(train_dataset, shuffle=True)
+        val_sampler = DistributedSampler(val_dataset, shuffle=False)
     else:
-        train_loader = DataLoader(
-            train_dataset,
-            batch_size=batch_size,
-            shuffle=True,
-            num_workers=num_workers,
-            pin_memory=pin_memory,
-            drop_last=True,
-        )
+        train_sampler = None
+        val_sampler = None
+
+    train_loader = DataLoader(
+        train_dataset,
+        batch_size=batch_size,
+        sampler=train_sampler,
+        shuffle=(train_sampler is None),
+        num_workers=num_workers,
+        pin_memory=True,
+        drop_last=True,
+    )
 
     val_loader = DataLoader(
         val_dataset,
         batch_size=batch_size,
+        sampler=val_sampler,
         shuffle=False,
         num_workers=num_workers,
-        pin_memory=pin_memory,
+        pin_memory=True,
     )
 
     return train_loader, val_loader
 
 
 # --- Quick Test ---
+# --- Quick Test ---
 if __name__ == "__main__":
     train_loader, val_loader = get_dataloaders(
         data_dir="data/raw",
         batch_size=4,
         img_size=(384, 384),
-        use_weighted_sampler=True,
+        is_distributed=False,  # <-- Заменили параметр
     )
 
     images, targets, class_ids = next(iter(train_loader))
