@@ -1,14 +1,14 @@
 data:
   data_dir: "data/raw"
-  img_size: [384, 384]
+  img_size: [512, 512]
   crop_bbox: true
   num_workers: 4
 
 model:
-  name: "convnext_small.fb_in22k_ft_in1k_384"
+  name: "tf_efficientnetv2_s.in21k_ft_in1k"  # Заменили ConvNeXt на EfficientNetV2-S
   pretrained: true
-  drop_rate: 0.4      # УВЕЛИЧЕНО с 0.2: Жестче глушим нейроны, чтобы не заучивала трейн
-  init_bias: 2.88     # ИЗМЕНЕНО: Ставим точное среднее значение из твоей статистики
+  drop_rate: 0.3      # Чуть уменьшаем drop_rate, так как EfficientNetV2 регуляризуется иначе
+  init_bias: 2.88  # ИЗМЕНЕНО: Ставим точное среднее значение из твоей статистики
 
 train:
   loss_name: "wing"   # ИЗМЕНЕНО: Переходим на Wing Loss!

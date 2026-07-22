@@ -13,3 +13,4 @@ GEMINI.md
 data/
 
 .venv
+best_bcs_model.pt

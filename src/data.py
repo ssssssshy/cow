@@ -1,4 +1,5 @@
 from collections import Counter
+from math import ceil
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple, Union
 
@@ -9,7 +10,7 @@ import torch
 from torch.utils.data import DataLoader, Dataset, WeightedRandomSampler
 from torch.utils.data.distributed import DistributedSampler
 
-# --- 1. Маппинг классов в непрерывные значения BCS ---
+
 DEFAULT_CLASS_TO_BCS: Dict[int, float] = {
     0: 1.0,
     1: 1.25,
@@ -31,35 +32,31 @@ DEFAULT_CLASS_TO_BCS: Dict[int, float] = {
 }
 
 
-# --- 2. Конфигурация аугментаций (Albumentations) ---
 def get_transforms(
     img_size: Tuple[int, int] = (384, 384),
 ) -> Tuple[A.Compose, A.Compose]:
-    """Aугментации, оптимизированные под ракурс съемки коров сверху (Top-View).
-
-    img_size: (Height, Width) для входа в нейросеть
-    """
+    """Аугментации, оптимизированные под ракурс съемки коров сверху (Top-View)."""
     train_transform = A.Compose(
         [
             A.Resize(height=img_size[0], width=img_size[1]),
             A.HorizontalFlip(p=0.5),
             A.Affine(
-                scale=(0.92, 1.08),
-                translate_percent=(-0.05, 0.05),
-                rotate=(-12, 12),
-                p=0.6,
+                scale=(0.90, 1.10),
+                translate_percent=(-0.06, 0.06),
+                rotate=(-15, 15),
+                p=0.7,
             ),
             A.ColorJitter(
-                brightness=0.2, contrast=0.2, saturation=0.15, hue=0.05, p=0.5
+                brightness=0.25, contrast=0.25, saturation=0.2, hue=0.08, p=0.6
             ),
-            A.RandomGamma(gamma_limit=(80, 120), p=0.3),
-            A.OneOf(
-                [
-                    A.MotionBlur(blur_limit=3, p=0.5),
-                    A.GaussNoise(p=0.5),
-                ],
-                p=0.3,
+            # Безопасный аналог CoarseDropout без устаревших параметров
+            A.CoarseDropout(
+                num_holes_range=(3, 8),
+                hole_height_range=(16, 32),
+                hole_width_range=(16, 32),
+                p=0.5,
             ),
+            A.RandomGamma(gamma_limit=(75, 125), p=0.4),
             A.Normalize(
                 mean=(0.485, 0.456, 0.406),
                 std=(0.229, 0.224, 0.225),
@@ -82,7 +79,6 @@ def get_transforms(
     return train_transform, val_transform
 
 
-# --- 3. PyTorch Dataset ---
 class CowBCSDataset(Dataset):
     def __init__(
         self,
@@ -94,7 +90,6 @@ class CowBCSDataset(Dataset):
         transform: Optional[A.Compose] = None,
         class_to_bcs: Optional[Dict[int, float]] = None,
     ):
-        """Dataset для задачи оценки упитанности коров (BCS)."""
         self.data_dir = Path(data_dir)
         self.split = split
         self.img_size = img_size
@@ -105,7 +100,6 @@ class CowBCSDataset(Dataset):
 
         self.img_dir = self.data_dir / "images" / split
         self.lbl_dir = self.data_dir / "labels" / split
-
         self.samples = self._load_samples()
 
     def _load_samples(self) -> List[Dict]:
@@ -124,7 +118,6 @@ class CowBCSDataset(Dataset):
                 lines = [line.strip() for line in f if line.strip()]
                 if not lines:
                     continue
-
                 parts = lines[0].split()
                 cls_id = int(parts[0])
                 xc, yc, w, h = map(float, parts[1:5])
@@ -146,7 +139,6 @@ class CowBCSDataset(Dataset):
 
     def __getitem__(self, idx: int) -> Tuple[torch.Tensor, torch.Tensor, int]:
         sample = self.samples[idx]
-
         image = cv2.imread(str(sample["img_path"]))
         if image is None:
             raise FileNotFoundError(
@@ -158,7 +150,6 @@ class CowBCSDataset(Dataset):
 
         if self.crop_bbox:
             xc, yc, bw, bh = sample["bbox"]
-
             pad_w = bw * self.bbox_padding
             pad_h = bh * self.bbox_padding
 
@@ -166,7 +157,6 @@ class CowBCSDataset(Dataset):
             ymin = max(0, int((yc - bh / 2 - pad_h) * h_img))
             xmax = min(w_img, int((xc + bw / 2 + pad_w) * w_img))
             ymax = min(h_img, int((yc + bh / 2 + pad_h) * h_img))
-
             image = image[ymin:ymax, xmin:xmax]
 
         if self.transform:
@@ -175,97 +165,181 @@ class CowBCSDataset(Dataset):
         else:
             image_out = image
 
-        # Гарантируем для Pylance и PyTorch, что на выходе строго torch.Tensor
         if not isinstance(image_out, torch.Tensor):
             image_out = torch.from_numpy(image_out).permute(2, 0, 1).float() / 255.0
 
         bcs_target = torch.tensor(sample["bcs_target"], dtype=torch.float32)
         class_id = sample["class_id"]
-
         return image_out, bcs_target, class_id
 
 
-# --- 4. Weighted Sampler для компенсации дисбаланса ---
-def get_weighted_sampler(dataset: CowBCSDataset) -> WeightedRandomSampler:
-    """Возвращает WeightedRandomSampler для балансировки батчей."""
-    targets = [sample["bcs_target"] for sample in dataset.samples]
-    counts = Counter(targets)
+# --- КАСТОМНЫЙ СЕМПЛЕР: DDP + ВЕСА КЛАССОВ ---
+class DistributedWeightedRandomSampler(torch.utils.data.Sampler):
+    """Семплер, объединяющий WeightedRandomSampler и распределенное обучение (DDP)."""
 
-    sample_weights = [1.0 / counts[t] for t in targets]
+    def __init__(self, dataset, num_replicas=None, rank=None, replacement=True):
+        if num_replicas is None:
+            num_replicas = (
+                torch.distributed.get_world_size()
+                if torch.distributed.is_initialized()
+                else 1
+            )
+        if rank is None:
+            rank = (
+                torch.distributed.get_rank()
+                if torch.distributed.is_initialized()
+                else 0
+            )
 
-    sampler = WeightedRandomSampler(
-        weights=sample_weights,
-        num_samples=len(sample_weights),
-        replacement=True,
-    )
-    return sampler
+        self.dataset = dataset
+        self.num_replicas = num_replicas
+        self.rank = rank
+        self.replacement = replacement
+
+        # Считаем веса для каждого элемента датасета
+        targets = [sample["bcs_target"] for sample in dataset.samples]
+        counts = Counter(targets)
+
+        # Обратная частота для балансировки (смягченная с помощью counts ** 0.7)
+        weights = [1.0 / (counts[t] ** 0.7) for t in targets]
+        self.weights = torch.as_tensor(weights, dtype=torch.double)
+
+        self.num_samples = len(targets)
+        # Округляем количество сэмплов на реплику, чтобы всем хватило поровну
+        self.total_size = ceil(self.num_samples / self.num_replicas) * self.num_replicas
+        self.num_samples_per_replica = self.total_size // self.num_replicas
+        self.epoch = 0
+
+    def __iter__(self):
+        # Синхронизируем генератор по эпохам, чтобы на каждой эпохе выборка менялась корректно
+        generator = torch.Generator()
+        generator.manual_seed(self.epoch)
+
+        # Генерируем взвешенные индексы глобально
+        indices = torch.multinomial(
+            self.weights, self.total_size, self.replacement, generator=generator
+        ).tolist()
+
+        # Разделяем индексы между видеокартами (каждому GPU достается свой срез)
+        indices = indices[self.rank :: self.num_replicas]
+        return iter(indices)
+
+    def __len__(self) -> int:
+        return self.num_samples_per_replica
+
+    def set_epoch(self, epoch: int):
+        self.epoch = epoch
 
 
-# --- 5. Функция сборки DataLoaders ---
+# --- COLLATE ФУНКЦИЯ ДЛЯ ВНЕДРЕНИЯ MIXUP ---
+class MixupCollate:
+    """Интерполяция изображений и таргетов (Mixup) на уровне формирования батча."""
+
+    def __init__(self, alpha: float = 0.2):
+        self.alpha = alpha
+
+    def __call__(self, batch: List[Tuple[torch.Tensor, torch.Tensor, int]]):
+        images, bcs_targets, class_ids = zip(*batch)
+
+        images = torch.stack(images, dim=0)
+        bcs_targets = torch.stack(bcs_targets, dim=0)
+        class_ids = torch.tensor(class_ids, dtype=torch.long)
+
+        if self.alpha > 0:
+            # Сэмплируем лямбду из бета-распределения
+            lam = torch.distributions.Beta(self.alpha, self.alpha).sample().item()
+        else:
+            lam = 1.0
+
+        batch_size = images.size(0)
+        # Генерируем случайные индексы для перемешивания батча
+        index = torch.randperm(batch_size)
+
+        # Смешиваем изображения
+        mixed_images = lam * images + (1 - lam) * images[index]
+        # Смешиваем таргеты (в случае регрессии мы можем смешивать сами значения BCS)
+        mixed_targets = lam * bcs_targets + (1 - lam) * bcs_targets[index]
+
+        # Возвращаем смешанные изображения и таргеты.
+        # Исходные class_ids возвращаем без изменений (они нужны в основном для метрик).
+        return mixed_images, mixed_targets, class_ids
+
+
+# --- Функция сборки DataLoaders ---
 def get_dataloaders(
-    data_dir: Union[str, Path] = "data/raw",
-    batch_size: int = 16,
-    img_size: Tuple[int, int] = (384, 384),
-    crop_bbox: bool = True,
-    num_workers: int = 4,
-    is_distributed: bool = False,
-) -> Tuple[DataLoader, DataLoader]:
-
+    data_dir,
+    batch_size,
+    img_size,
+    crop_bbox=True,
+    is_distributed=False,
+    num_workers=4,
+    mixup_alpha=0.2,  # Параметр для контроля интенсивности Mixup
+):
     train_tf, val_tf = get_transforms(img_size=img_size)
 
-    # ВАЖНО: Убедитесь, что датасет уже разделен по ID коровы, а не случайно[cite: 1].
     train_dataset = CowBCSDataset(
-        data_dir,
+        data_dir=data_dir,
         split="train",
         img_size=img_size,
         crop_bbox=crop_bbox,
         transform=train_tf,
     )
     val_dataset = CowBCSDataset(
-        data_dir, split="val", img_size=img_size, crop_bbox=crop_bbox, transform=val_tf
+        data_dir=data_dir,
+        split="val",
+        img_size=img_size,
+        crop_bbox=crop_bbox,
+        transform=val_tf,
     )
+
+    # Инициализируем Collate функцию для Mixup (применяем только к обучающей выборке)
+    train_collate_fn = MixupCollate(alpha=mixup_alpha) if mixup_alpha > 0 else None
 
     if is_distributed:
-        train_sampler = DistributedSampler(train_dataset, shuffle=True)
+        # Используем наш гибридный семплер для DDP + балансировки классов
+        train_sampler = DistributedWeightedRandomSampler(train_dataset)
         val_sampler = DistributedSampler(val_dataset, shuffle=False)
+
+        train_loader = DataLoader(
+            train_dataset,
+            batch_size=batch_size,
+            sampler=train_sampler,
+            num_workers=num_workers,
+            pin_memory=True,
+            collate_fn=train_collate_fn,
+        )
+        val_loader = DataLoader(
+            val_dataset,
+            batch_size=batch_size,
+            sampler=val_sampler,
+            num_workers=num_workers,
+            pin_memory=True,
+        )
     else:
-        train_sampler = None
-        val_sampler = None
+        # Для одиночной видеокарты используем стандартный WeightedRandomSampler
+        targets = [sample["bcs_target"] for sample in train_dataset.samples]
+        counts = Counter(targets)
+        # Смягчение весов (counts ** 0.7)
+        sample_weights = [1.0 / (counts[t] ** 0.7) for t in targets]
 
-    train_loader = DataLoader(
-        train_dataset,
-        batch_size=batch_size,
-        sampler=train_sampler,
-        shuffle=(train_sampler is None),
-        num_workers=num_workers,
-        pin_memory=True,
-        drop_last=True,
-    )
+        sampler = WeightedRandomSampler(
+            weights=sample_weights, num_samples=len(sample_weights), replacement=True
+        )
 
-    val_loader = DataLoader(
-        val_dataset,
-        batch_size=batch_size,
-        sampler=val_sampler,
-        shuffle=False,
-        num_workers=num_workers,
-        pin_memory=True,
-    )
+        train_loader = DataLoader(
+            train_dataset,
+            batch_size=batch_size,
+            sampler=sampler,
+            num_workers=num_workers,
+            pin_memory=True,
+            collate_fn=train_collate_fn,
+        )
+        val_loader = DataLoader(
+            val_dataset,
+            batch_size=batch_size,
+            shuffle=False,
+            num_workers=num_workers,
+            pin_memory=True,
+        )
 
     return train_loader, val_loader
-
-
-# --- Quick Test ---
-# --- Quick Test ---
-if __name__ == "__main__":
-    train_loader, val_loader = get_dataloaders(
-        data_dir="data/raw",
-        batch_size=4,
-        img_size=(384, 384),
-        is_distributed=False,  # <-- Заменили параметр
-    )
-
-    images, targets, class_ids = next(iter(train_loader))
-    print("\nТестовый батч:")
-    print(f"  Формат картинок: {images.shape}")
-    print(f"  Таргеты BCS: {targets}")
-    print(f"  Class IDs: {class_ids}")

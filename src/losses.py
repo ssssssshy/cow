@@ -1,6 +1,7 @@
 from typing import Optional
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 
 
 class WingLoss(nn.Module):
@@ -63,6 +64,39 @@ class WeightedSmoothL1Loss(nn.Module):
         elif self.reduction == "sum":
             return loss.sum()
         return loss
+
+
+class OrdinalRegressionLoss(nn.Module):
+    """
+    Ordinal Cross-Entropy Loss для задачи BCS.
+    Превращает непрерывную/порядковую задачу в K-1 бинарных классификаций.
+    """
+
+    def __init__(self, num_classes: int = 17):
+        super().__init__()
+        self.num_classes = num_classes
+
+    def forward(self, preds: torch.Tensor, targets: torch.Tensor) -> torch.Tensor:
+        """
+        preds: сырые логиты от модели с размером [Batch_size, num_classes - 1]
+        targets: индексы классов от 0 до num_classes - 1 (в виде тензора целых чисел)
+        """
+        device = preds.device
+
+        # Создаем матрицу бинарных таргетов для каждого порога
+        # Например, если таргет класса 8, то для порогов 0..7 таргет = 1, а для 8..15 таргет = 0
+        levels = torch.arange(self.num_classes - 1, device=device).view(
+            1, -1
+        )  # [1, K-1]
+        target_levels = (targets.view(-1, 1) > levels).float()  # [Batch_size, K-1]
+
+        # Считаем бинарную кросс-энтропию с логитами для каждого порога
+        loss = F.binary_cross_entropy_with_logits(
+            preds, target_levels, reduction="none"
+        )
+
+        # Суммируем потери по всем порогам и усредняем по батчу
+        return loss.sum(dim=1).mean()
 
 
 def get_loss_function(loss_name: str = "smooth_l1", beta: float = 0.1) -> nn.Module:

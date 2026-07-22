@@ -150,7 +150,6 @@ def run_training(cfg: Config):
         model_name=cfg.model.name,
         pretrained=cfg.model.pretrained,
         drop_rate=cfg.model.drop_rate,
-        init_bias=cfg.model.init_bias,
     ).to(device)
 
     model = DDP(model, device_ids=[local_rank], output_device=local_rank)
