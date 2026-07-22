@@ -8,3 +8,8 @@ wheels/
 
 # Virtual environments
 .venv
+GEMINI.md
+
+data/
+
+.venv
