@@ -8,7 +8,7 @@ data:
 model:
   name: "convnext_small.fb_in22k_ft_in1k_384" 
   pretrained: true
-  drop_rate: 0.4      
+  drop_rate: 0.1      
   init_bias: 2.88  
 
 train:
@@ -16,7 +16,7 @@ train:
   batch_size: 16       
   epochs: 30
   lr: 5.0e-5           
-  weight_decay: 0.05   
+  weight_decay: 0.03   
   warmup_epochs: 2    
   patience: 10
   save_dir: "checkpoints"

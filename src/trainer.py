@@ -170,9 +170,30 @@ def run_training(cfg: Config):
     model = DDP(model, device_ids=[local_rank], output_device=local_rank)
     criterion = get_loss_function(cfg.train.loss_name).to(device)
 
-    optimizer = AdamW(
-        model.parameters(), lr=cfg.train.lr, weight_decay=cfg.train.weight_decay
-    )
+    decay_params = []
+    no_decay_params = []
+
+    for name, param in model.named_parameters():
+        if not param.requires_grad:
+            continue
+
+        # Отключаем WD для одномерных тензоров (LayerNorm, LayerScale) и всех смещений (bias)
+        if param.ndim < 2 or name.endswith(".bias"):
+            no_decay_params.append(param)
+        else:
+            # Применяем WD только к матрицам весов (Conv2d, Linear)
+            decay_params.append(param)
+
+    optimizer_grouped_parameters = [
+        {"params": decay_params, "weight_decay": cfg.train.weight_decay},
+        {
+            "params": no_decay_params,
+            "weight_decay": 0.0,  # Полностью отключаем штраф
+        },
+    ]
+
+    optimizer = AdamW(optimizer_grouped_parameters, lr=cfg.train.lr)
+
     warmup_scheduler = LinearLR(
         optimizer, start_factor=0.1, total_iters=cfg.train.warmup_epochs
     )
