@@ -118,27 +118,63 @@ class OrdinalRegressionLoss(nn.Module):
         return loss.sum(dim=1).mean()
 
 
+class BCSMagneticLoss(nn.Module):
+    """
+    Гибридная функция потерь специально для индекса BCS.
+    Объединяет базовую регрессию (Huber) с "магнитной" сеткой,
+    которая штрафует предсказания, зависающие между шагами 0.25.
+    """
+
+    def __init__(
+        self, delta: float = 0.05, mag_weight: float = 0.1, step: float = 0.25
+    ):
+        super().__init__()
+        self.delta = delta  # Порог Huber
+        self.mag_weight = mag_weight  # Сила "магнита" (штрафа за дробные значения)
+        self.step = step  # Шаг шкалы BCS (0.25)
+
+        # Коэффициент для перевода шага 0.25 в период синуса (Пи)
+        # Если step = 0.25, то multiplier = 4.0
+        self.multiplier = 1.0 / step
+
+    def forward(self, preds: torch.Tensor, targets: torch.Tensor) -> torch.Tensor:
+        # 1. Базовая стабильная регрессия (чтобы модель поняла общую упитанность коровы)
+        huber_loss = F.huber_loss(preds, targets, reduction="mean", delta=self.delta)
+
+        # 2. Магнитный штраф (Quantization Penalty)
+        # Умножаем предсказание на 4 и на Пи.
+        # Если pred = 2.75  -> sin(11 * Pi) = 0 (Штрафа нет, мы попали в сетку)
+        # Если pred = 2.875 -> sin(11.5 * Pi) = 1 (Максимальный штраф, мы застряли посередине)
+        magnetic_penalty = torch.sin(preds * self.multiplier * torch.pi) ** 2
+        magnetic_loss = magnetic_penalty.mean() * self.mag_weight
+
+        # Итоговый лосс: Тянем к правильному ответу + заставляем встать ровно на шаг 0.25
+        return huber_loss + magnetic_loss
+
+
 def get_loss_function(
     loss_name: str = "smooth_l1",
     beta: float = 0.1,
     huber_delta: float = 0.05,
-    wing_omega: float = 0.5,  # Добавляем параметры Wing
-    wing_epsilon: float = 0.1,  # Добавляем параметры Wing
+    wing_omega: float = 0.5,
+    wing_epsilon: float = 0.1,
+    mag_weight: float = 0.05,  # Добавляем силу магнита
 ) -> nn.Module:
     """Фабрика для удобного выбора Loss-функции."""
     loss_name = loss_name.lower()
+
     if loss_name == "smooth_l1":
         return nn.SmoothL1Loss(beta=beta)
     elif loss_name == "huber":
         return HuberLossWithDelta(delta=huber_delta)
+    elif loss_name == "magnetic":  # 🔥 Наш новый гибрид
+        return BCSMagneticLoss(delta=huber_delta, mag_weight=mag_weight)
     elif loss_name == "l1":
         return nn.L1Loss()
     elif loss_name == "mse":
         return nn.MSELoss()
     elif loss_name == "wing":
-        return WingLoss(
-            omega=wing_omega, epsilon=wing_epsilon
-        )  # Пробрасываем параметры
+        return WingLoss(omega=wing_omega, epsilon=wing_epsilon)
     elif loss_name == "weighted_smooth_l1":
         return WeightedSmoothL1Loss(beta=beta)
     elif loss_name == "ordinal":
