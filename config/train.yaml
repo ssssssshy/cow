@@ -1,29 +1,27 @@
 data:
-  data_dir: "data/raw"
+  data_dir: "data/raw" # Заменишь на путь Kaggle при запуске
   img_size: [384, 384] 
   crop_bbox: true
   num_workers: 4
-  target_noise: 0.0     # 🔥 ЯВНО ОТКЛЮЧАЕМ ШУМ, чтобы проверить чистый Wing Loss
+  target_noise: 0.0     # Чистые метки
 
 model:
   name: "convnext_small.fb_in22k_ft_in1k_384" 
   pretrained: true
-  drop_rate: 0.5      
+  drop_rate: 0.4      
   init_bias: 2.88  
 
 train:
-  loss_name: "magnetic"    
+  loss_name: "smooth_l1" # 🔥 Воскрешаем упавший, но перспективный ран
   batch_size: 16       
-  epochs: 30
+  epochs: 35             # Даем чуть больше времени, раз он был хорош на 25-й
   lr: 5.0e-5           
-  weight_decay: 0.08   
+  weight_decay: 0.05   
   warmup_epochs: 5    
   patience: 10
   save_dir: "checkpoints"
   use_wandb: true
   wandb_project: "cow_bcs"
-  wandb_name: "run_03_convnext_wing_reg"
+  wandb_name: "convnext_smooth_l1_clean"
   mixup_alpha: 0.0
-
-  # 🔥 ЯВНО ОТКЛЮЧАЕМ SWA, так как epochs=30 (меньше, чем swa_start)
   use_swa: false
