@@ -116,20 +116,16 @@ def validate_epoch(model, loader, criterion, device):
     final_preds = torch.cat(gathered_preds, dim=0)
     final_targets = torch.cat(gathered_targets, dim=0)
 
-    if is_master:
-        val_metrics = compute_all_metrics(final_preds, final_targets)
+    val_metrics = compute_all_metrics(final_preds, final_targets)
 
-        # 🔥 Расчет MAE только для экстремальных классов (<= 2.50 или >= 3.50)
-        extreme_mask = (final_targets <= 2.50) | (final_targets >= 3.50)
-
-        if extreme_mask.any():
-            extreme_preds = final_preds[extreme_mask]
-            extreme_targets = final_targets[extreme_mask]
-            val_metrics["extreme_mae"] = compute_mae(extreme_preds, extreme_targets)
-        else:
-            val_metrics["extreme_mae"] = 0.0
+    # Расчет MAE только для экстремальных классов
+    extreme_mask = (final_targets <= 2.50) | (final_targets >= 3.50)
+    if extreme_mask.any():
+        val_metrics["extreme_mae"] = compute_mae(
+            final_preds[extreme_mask], final_targets[extreme_mask]
+        )
     else:
-        val_metrics = None
+        val_metrics["extreme_mae"] = 0.0
 
     return global_val_loss, val_metrics
 
@@ -214,18 +210,21 @@ def run_training(cfg: Config):
         )
         val_loss, val_metrics = validate_epoch(model, val_loader, criterion, device)
 
-        # 🔥 Шаг планировщика (обычный или SWA)
+        # Вытаскиваем MAE для Early Stopping
+        val_mae = val_metrics["mae"]
+
+        # Шаг планировщика (обычный или SWA)
         if cfg.train.use_swa and epoch >= cfg.train.swa_start:
             swa_model.update_parameters(model)
             swa_scheduler.step()
         else:
             scheduler.step()
 
-        early_stopping(val_loss)
+        # 🔥 ТЕПЕРЬ СЛЕДИМ ЗА MAE, А НЕ ЗА LOSS
+        early_stopping(val_mae)
 
-        if is_master and val_metrics is not None:
+        if is_master:
             elapsed = time.time() - start_time
-            val_mae = val_metrics["mae"]
             extreme_mae = val_metrics.get("extreme_mae", 0.0)
             acc_025 = val_metrics["acc_tol_0.25"]
 
@@ -267,11 +266,15 @@ def run_training(cfg: Config):
         if is_master:
             print("🔄 Финализация SWA: Обновление статистики BatchNorm...")
         update_bn(train_loader, swa_model, device=device)
-        
+
         # Валидация SWA модели
-        val_loss_swa, val_metrics_swa = validate_epoch(swa_model, val_loader, criterion, device)
+        val_loss_swa, val_metrics_swa = validate_epoch(
+            swa_model, val_loader, criterion, device
+        )
         if is_master and val_metrics_swa:
-            print(f"📊 SWA Metrics | MAE: {val_metrics_swa['mae']:.3f} (Extr: {val_metrics_swa['extreme_mae']:.3f})")
+            print(
+                f"📊 SWA Metrics | MAE: {val_metrics_swa['mae']:.3f} (Extr: {val_metrics_swa['extreme_mae']:.3f})"
+            )
             torch.save(swa_model.module.state_dict(), SAVE_DIR / "swa_bcs_model.pt")
 
     if is_master and cfg.train.use_wandb:

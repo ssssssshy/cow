@@ -16,3 +16,4 @@ data/
 convnext_2xGPU_baseline purpul.pt
 new.txt
 effnetrun1.pt
+results/

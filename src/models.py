@@ -25,6 +25,7 @@ class CowBCSModel(nn.Module):
             pretrained=pretrained,
             num_classes=self.num_outputs,
             drop_rate=drop_rate,
+            drop_path_rate=0.2,
         )
 
         # 🔥 Трюк для быстрого старта: инициализируем bias финального слоя

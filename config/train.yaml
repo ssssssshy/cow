@@ -1,25 +1,25 @@
 data:
   data_dir: "data/raw"
-  img_size: [512, 512]
+  img_size: [384, 384] # Возвращаем 384, это родное разрешение для весов convnext
   crop_bbox: true
   num_workers: 4
 
 model:
-  name: "tf_efficientnetv2_s.in21k_ft_in1k"  # Заменили ConvNeXt на EfficientNetV2-S
+  name: "convnext_small.fb_in22k_ft_in1k_384" # Переключаем на твоего лидера
   pretrained: true
-  drop_rate: 0.3      # Чуть уменьшаем drop_rate, так как EfficientNetV2 регуляризуется иначе
-  init_bias: 2.88  # ИЗМЕНЕНО: Ставим точное среднее значение из твоей статистики
+  drop_rate: 0.5      # 🔥 Усиливаем обычный Dropout (было 0.3)
+  init_bias: 2.88  
 
 train:
-  loss_name: "huber"   # ИЗМЕНЕНО: Переходим на Wing Loss!
-  batch_size: 16
-  epochs: 25
-  lr: 5.0e-5            # УМЕНЬШЕНО с 1e-4: Для Wing Loss нужен шаг поменьше
-  weight_decay: 0.05  # УВЕЛИЧЕНО с 0.01: Сильнее штрафуем веса за переобучение
-  warmup_epochs: 5    # УВЕЛИЧЕНО: Даем больше времени на разогрев
+  loss_name: "wing"    # 🔥 Проверяем Wing Loss против Smooth L1
+  batch_size: 16       # Если будет падать по памяти (OOM), снизь до 8
+  epochs: 30
+  lr: 5.0e-5           # Оставляем этот стабильный LR
+  weight_decay: 0.08   # 🔥 Усиливаем L2-регуляризацию (было 0.05)
+  warmup_epochs: 5    
   patience: 10
   save_dir: "checkpoints"
   use_wandb: true
   wandb_project: "cow_bcs"
-  wandb_name: "run_02_wing_loss_reg"
+  wandb_name: "run_03_convnext_wing_reg"
   mixup_alpha: 0.0
