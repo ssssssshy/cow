@@ -3,12 +3,12 @@ data:
   img_size: [384, 384] 
   crop_bbox: true
   num_workers: 4
-  target_noise: 0.0     # Чистые метки
+  target_noise: 0.05     # Чистые метки
 
 model:
   name: "convnext_small.fb_in22k_ft_in1k_384" 
   pretrained: true
-  drop_rate: 0.4      
+  drop_rate: 0.3      
   init_bias: 2.88  
 
 train:
@@ -16,7 +16,7 @@ train:
   batch_size: 16       
   epochs: 35             # Даем чуть больше времени, раз он был хорош на 25-й
   lr: 5.0e-5           
-  weight_decay: 0.05   
+  weight_decay: 0.03   
   warmup_epochs: 5    
   patience: 10
   save_dir: "checkpoints"

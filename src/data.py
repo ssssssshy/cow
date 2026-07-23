@@ -41,7 +41,6 @@ def get_transforms(
             A.Resize(height=img_size[0], width=img_size[1]),
             # 🔥 ДОБАВЛЕНО: Усиление контраста (CLAHE). Вытягивает тени впадин.
             # clip_limit=2.0..4.0 — это порог ограничения контраста, чтобы не было шума.
-            A.CLAHE(clip_limit=3.0, tile_grid_size=(8, 8), p=1.0),
             A.HorizontalFlip(p=0.5),
             A.Affine(
                 scale=(0.90, 1.10),
