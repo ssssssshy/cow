@@ -5,20 +5,21 @@ import torch.nn.functional as F
 
 
 class WingLoss(nn.Module):
-    """Wing Loss для точной регрессии непрерывных параметров.
-
-    Обеспечивает более сильные градиенты при малых ошибках, стимулируя высокую
-    точность.
+    """
+    Wing Loss, адаптированный под узкий диапазон (BCS от 1.0 до 5.0).
     """
 
     def __init__(
-        self, omega: float = 10.0, epsilon: float = 2.0, reduction: str = "mean"
+        self, omega: float = 0.5, epsilon: float = 0.1, reduction: str = "mean"
     ):
         super().__init__()
         self.omega = omega
         self.epsilon = epsilon
         self.reduction = reduction
-        self.c = omega - omega * torch.log(torch.tensor(1.0 + omega / epsilon))
+        # Использование float тензора для вычисления C
+        self.c = omega - omega * torch.log(
+            torch.tensor(1.0 + omega / epsilon, dtype=torch.float32)
+        )
 
     def forward(self, preds: torch.Tensor, targets: torch.Tensor) -> torch.Tensor:
         delta = torch.abs(preds - targets)
@@ -118,7 +119,11 @@ class OrdinalRegressionLoss(nn.Module):
 
 
 def get_loss_function(
-    loss_name: str = "smooth_l1", beta: float = 0.1, huber_delta: float = 0.05
+    loss_name: str = "smooth_l1",
+    beta: float = 0.1,
+    huber_delta: float = 0.05,
+    wing_omega: float = 0.5,  # Добавляем параметры Wing
+    wing_epsilon: float = 0.1,  # Добавляем параметры Wing
 ) -> nn.Module:
     """Фабрика для удобного выбора Loss-функции."""
     loss_name = loss_name.lower()
@@ -131,7 +136,9 @@ def get_loss_function(
     elif loss_name == "mse":
         return nn.MSELoss()
     elif loss_name == "wing":
-        return WingLoss()
+        return WingLoss(
+            omega=wing_omega, epsilon=wing_epsilon
+        )  # Пробрасываем параметры
     elif loss_name == "weighted_smooth_l1":
         return WeightedSmoothL1Loss(beta=beta)
     elif loss_name == "ordinal":
