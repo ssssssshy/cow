@@ -13,6 +13,7 @@ from src.config import load_config
 from src.data import get_dataloaders
 from src.metrics import compute_all_metrics
 from src.models import CowBCSModel
+from src.utils import set_seed
 
 
 def load_model(cfg, model_path, device):
@@ -198,6 +199,7 @@ def mine_and_plot_hard_examples(
 
 def main():
     cfg = load_config("config/train.yaml")
+    set_seed(cfg.train.seed)
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"🔍 Запуск оценки на устройстве: {device}")
 

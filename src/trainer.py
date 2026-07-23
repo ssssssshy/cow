@@ -20,7 +20,7 @@ from src.data import get_dataloaders
 from src.losses import get_loss_function
 from src.metrics import compute_all_metrics, compute_mae
 from src.models import CowBCSModel
-from src.utils import EarlyStopping
+from src.utils import EarlyStopping, set_seed
 
 
 def setup_ddp():
@@ -131,6 +131,7 @@ def validate_epoch(model, loader, criterion, device):
 
 
 def run_training(cfg: Config):
+    set_seed(cfg.train.seed)
     local_rank = setup_ddp()
     device = torch.device(f"cuda:{local_rank}")
     is_master = local_rank == 0
