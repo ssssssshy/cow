@@ -12,7 +12,7 @@ model:
   init_bias: 2.88  
 
 train:
-  loss_name: "wing"    
+  loss_name: "huber"    
   batch_size: 16       
   epochs: 30
   lr: 5.0e-5           
