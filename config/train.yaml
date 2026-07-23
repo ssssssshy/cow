@@ -1,21 +1,22 @@
 data:
   data_dir: "data/raw"
-  img_size: [384, 384] # Возвращаем 384, это родное разрешение для весов convnext
+  img_size: [384, 384] 
   crop_bbox: true
   num_workers: 4
+  target_noise: 0.0     # 🔥 ЯВНО ОТКЛЮЧАЕМ ШУМ, чтобы проверить чистый Wing Loss
 
 model:
-  name: "convnext_small.fb_in22k_ft_in1k_384" # Переключаем на твоего лидера
+  name: "convnext_small.fb_in22k_ft_in1k_384" 
   pretrained: true
-  drop_rate: 0.5      # 🔥 Усиливаем обычный Dropout (было 0.3)
+  drop_rate: 0.4      
   init_bias: 2.88  
 
 train:
-  loss_name: "wing"    # 🔥 Проверяем Wing Loss против Smooth L1
-  batch_size: 16       # Если будет падать по памяти (OOM), снизь до 8
+  loss_name: "wing"    
+  batch_size: 16       
   epochs: 30
-  lr: 5.0e-5           # Оставляем этот стабильный LR
-  weight_decay: 0.08   # 🔥 Усиливаем L2-регуляризацию (было 0.05)
+  lr: 5.0e-5           
+  weight_decay: 0.05   
   warmup_epochs: 5    
   patience: 10
   save_dir: "checkpoints"
@@ -23,3 +24,6 @@ train:
   wandb_project: "cow_bcs"
   wandb_name: "run_03_convnext_wing_reg"
   mixup_alpha: 0.0
+
+  # 🔥 ЯВНО ОТКЛЮЧАЕМ SWA, так как epochs=30 (меньше, чем swa_start)
+  use_swa: false

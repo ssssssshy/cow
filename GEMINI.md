@@ -41,13 +41,13 @@ The codebase is highly modular and written in Python using **PyTorch**, **timm**
    - **Weighted Sampler**: Implements a `WeightedRandomSampler` based on class frequencies to counter severe class imbalance.
 
 2. **Model Definition (`src/models.py`):**
-   - **`CowBCSModel`**: Based on `timm` backbones (default: `convnext_small.fb_in22k_ft_in1k_384`).
-   - **Bias Initialization**: The final linear head's bias is initialized to the dataset's average BCS score (e.g. `2.8`) to stabilize early training and accelerate loss convergence.
+   - **`CowBCSModel`**: Based on `timm` backbones (default: `convnext_small.fb_in22k_ft_in1k_384`) with a custom **CBAM (Convolutional Block Attention Module)** for channel and spatial attention to focus on critical body features.
+   - **Bias Initialization**: The final linear head's bias is initialized to the dataset's average BCS score (e.g. `2.88`) to stabilize early training.
 
 3. **Custom Loss Functions (`src/losses.py`):**
-   - **`WingLoss`**: Designed for high-accuracy continuous regression. It imposes stronger gradients for small errors, prompting the model to optimize fine predictions.
+   - **`WingLoss`**: Designed for high-accuracy continuous regression, configurable via `omega` and `epsilon` parameters for fine-tuning gradient focus on small errors.
    - **`WeightedSmoothL1Loss`**: Smooth L1 loss with optional sample weighting.
-   - **`get_loss_function`**: A factory function supporting `"smooth_l1"`, `"l1"`, `"mse"`, `"wing"`, and `"weighted_smooth_l1"`.
+   - **`get_loss_function`**: A factory function supporting `"smooth_l1"`, `"l1"`, `"mse"`, `"wing"`, `"weighted_smooth_l1"`, `"huber"`, and `"ordinal"`.
 
 4. **Metrics (`src/metrics.py`):**
    - **MAE & RMSE**: Mean Absolute Error and Root Mean Squared Error.
