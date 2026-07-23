@@ -35,10 +35,13 @@ DEFAULT_CLASS_TO_BCS: Dict[int, float] = {
 def get_transforms(
     img_size: Tuple[int, int] = (384, 384),
 ) -> Tuple[A.Compose, A.Compose]:
-    """Аугментации, оптимизированные под ракурс съемки коров сверху (Top-View)."""
+
     train_transform = A.Compose(
         [
             A.Resize(height=img_size[0], width=img_size[1]),
+            # 🔥 ДОБАВЛЕНО: Усиление контраста (CLAHE). Вытягивает тени впадин.
+            # clip_limit=2.0..4.0 — это порог ограничения контраста, чтобы не было шума.
+            A.CLAHE(clip_limit=3.0, tile_grid_size=(8, 8), p=1.0),
             A.HorizontalFlip(p=0.5),
             A.Affine(
                 scale=(0.90, 1.10),
@@ -49,7 +52,6 @@ def get_transforms(
             A.ColorJitter(
                 brightness=0.25, contrast=0.25, saturation=0.2, hue=0.08, p=0.6
             ),
-            # Безопасный аналог CoarseDropout без устаревших параметров
             A.CoarseDropout(
                 num_holes_range=(3, 8),
                 hole_height_range=(16, 32),
@@ -68,6 +70,8 @@ def get_transforms(
     val_transform = A.Compose(
         [
             A.Resize(height=img_size[0], width=img_size[1]),
+            # 🔥 ДОБАВЛЕНО: CLAHE обязательно нужен и на валидации!
+            A.CLAHE(clip_limit=3.0, tile_grid_size=(8, 8), p=1.0),
             A.Normalize(
                 mean=(0.485, 0.456, 0.406),
                 std=(0.229, 0.224, 0.225),
@@ -172,10 +176,11 @@ class CowBCSDataset(Dataset):
             image_out = torch.from_numpy(image_out).permute(2, 0, 1).float() / 255.0
 
         bcs_target_val = sample["bcs_target"]
-        
+
         # Добавляем Гауссов шум к таргету для защиты от шума разметки (только при обучении)
         if self.split == "train" and self.target_noise > 0:
             import numpy as np
+
             bcs_target_val += np.random.normal(0, self.target_noise)
             # Ограничиваем таргет физическими рамками шкалы BCS
             bcs_target_val = np.clip(bcs_target_val, 1.0, 5.0)
