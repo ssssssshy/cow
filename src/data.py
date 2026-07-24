@@ -1,17 +1,15 @@
 from collections import Counter
 from math import ceil
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple, Union
 
 import albumentations as A
-from albumentations.pytorch import ToTensorV2
 import cv2
 import torch
+from albumentations.pytorch import ToTensorV2
 from torch.utils.data import DataLoader, Dataset, WeightedRandomSampler
 from torch.utils.data.distributed import DistributedSampler
 
-
-DEFAULT_CLASS_TO_BCS: Dict[int, float] = {
+DEFAULT_CLASS_TO_BCS: dict[int, float] = {
     0: 1.0,
     1: 1.25,
     2: 1.5,
@@ -33,8 +31,8 @@ DEFAULT_CLASS_TO_BCS: Dict[int, float] = {
 
 
 def get_transforms(
-    img_size: Tuple[int, int] = (384, 384),
-) -> Tuple[A.Compose, A.Compose]:
+    img_size: tuple[int, int] = (384, 384),
+) -> tuple[A.Compose, A.Compose]:
 
     train_transform = A.Compose(
         [
@@ -85,13 +83,13 @@ def get_transforms(
 class CowBCSDataset(Dataset):
     def __init__(
         self,
-        data_dir: Union[str, Path],
+        data_dir: str | Path,
         split: str = "train",
-        img_size: Tuple[int, int] = (384, 384),
+        img_size: tuple[int, int] = (384, 384),
         crop_bbox: bool = True,
         bbox_padding: float = 0.1,
-        transform: Optional[A.Compose] = None,
-        class_to_bcs: Optional[Dict[int, float]] = None,
+        transform: A.Compose | None = None,
+        class_to_bcs: dict[int, float] | None = None,
         target_noise: float = 0.0,
     ):
         self.data_dir = Path(data_dir)
@@ -107,11 +105,11 @@ class CowBCSDataset(Dataset):
         self.lbl_dir = self.data_dir / "labels" / split
         self.samples = self._load_samples()
 
-    def _load_samples(self) -> List[Dict]:
+    def _load_samples(self) -> list[dict]:
         # ... (rest of the method unchanged) ...
         samples = []
         img_extensions = ("*.webp", "*.jpg", "*.jpeg", "*.png")
-        img_files: List[Path] = []
+        img_files: list[Path] = []
         for ext in img_extensions:
             img_files.extend(list(self.img_dir.glob(ext)))
 
@@ -143,7 +141,7 @@ class CowBCSDataset(Dataset):
     def __len__(self) -> int:
         return len(self.samples)
 
-    def __getitem__(self, idx: int) -> Tuple[torch.Tensor, torch.Tensor, int]:
+    def __getitem__(self, idx: int) -> tuple[torch.Tensor, torch.Tensor, int]:
         sample = self.samples[idx]
         image = cv2.imread(str(sample["img_path"]))
         if image is None:
@@ -254,7 +252,7 @@ class MixupCollate:
     def __init__(self, alpha: float = 0.2):
         self.alpha = alpha
 
-    def __call__(self, batch: List[Tuple[torch.Tensor, torch.Tensor, int]]):
+    def __call__(self, batch: list[tuple[torch.Tensor, torch.Tensor, int]]):
         images, bcs_targets, class_ids = zip(*batch)
 
         images = torch.stack(images, dim=0)

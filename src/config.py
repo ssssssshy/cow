@@ -1,6 +1,6 @@
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import List, cast
+from typing import cast
 
 from omegaconf import OmegaConf
 
@@ -8,7 +8,7 @@ from omegaconf import OmegaConf
 @dataclass
 class DataConfig:
     data_dir: str = "data/raw"
-    img_size: List[int] = field(default_factory=lambda: [384, 384])
+    img_size: list[int] = field(default_factory=lambda: [384, 384])
     crop_bbox: bool = True
     num_workers: int = 4
     target_noise: float = 0.05  # Интенсивность зашумления меток для защиты от шума

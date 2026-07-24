@@ -1,9 +1,9 @@
 from pathlib import Path
 
 import cv2
-import pandas as pd
 import matplotlib.pyplot as plt
 import numpy as np
+import pandas as pd
 import seaborn as sns
 import torch
 from sklearn.metrics import confusion_matrix
@@ -31,7 +31,7 @@ def load_model(cfg, model_path, device):
 
     clean_state_dict = {}
     for k, v in state_dict.items():
-        name = k[7:] if k.startswith("module.") else k
+        name = k.removeprefix("module.")
         clean_state_dict[name] = v
 
     model.load_state_dict(clean_state_dict)
@@ -166,7 +166,7 @@ def mine_and_plot_hard_examples(
 
     cols = 4
     rows = (num_to_plot + cols - 1) // cols
-    fig, axes = plt.subplots(rows, cols, figsize=(16, 4 * rows))
+    _fig, axes = plt.subplots(rows, cols, figsize=(16, 4 * rows))
     axes = axes.flatten()
 
     for i in range(num_to_plot):

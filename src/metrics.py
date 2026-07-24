@@ -1,4 +1,3 @@
-from typing import Dict
 import torch
 
 
@@ -35,7 +34,7 @@ def compute_exact_accuracy(
     return (correct / len(targets)).item() * 100.0
 
 
-def compute_all_metrics(preds: torch.Tensor, targets: torch.Tensor) -> Dict[str, float]:
+def compute_all_metrics(preds: torch.Tensor, targets: torch.Tensor) -> dict[str, float]:
     """Считает полный комплекс метрик для оценки модели.
 
     Returns:

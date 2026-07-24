@@ -4,16 +4,16 @@ from pathlib import Path
 from typing import Any, cast
 
 import torch
-import torch.nn as nn
 import torch.distributed as dist
-from torch.nn.parallel import DistributedDataParallel as DDP
-from torch.optim import AdamW
-from torch.optim.lr_scheduler import SequentialLR, LinearLR, CosineAnnealingLR
-from torch.optim.swa_utils import AveragedModel, SWALR, update_bn
-from torch.utils.data.distributed import DistributedSampler
-from tqdm import tqdm
 import wandb
 from omegaconf import OmegaConf
+from torch import nn
+from torch.nn.parallel import DistributedDataParallel as DDP
+from torch.optim import AdamW
+from torch.optim.lr_scheduler import CosineAnnealingLR, LinearLR, SequentialLR
+from torch.optim.swa_utils import SWALR, AveragedModel, update_bn
+from torch.utils.data.distributed import DistributedSampler
+from tqdm import tqdm
 
 from src.config import Config
 from src.data import get_dataloaders
@@ -41,7 +41,7 @@ def train_epoch(model, loader, criterion, optimizer, scaler, device, epoch):
 
     running_loss, running_mae, total_samples = 0.0, 0.0, 0
 
-    is_master = int(os.environ.get("LOCAL_RANK", 0)) == 0
+    is_master = int(os.environ.get("LOCAL_RANK", 0)) == 0  # noqa: PLW1508
     pbar = tqdm(loader, desc=f"Train Ep {epoch}", leave=False) if is_master else loader
 
     for images, targets, _ in pbar:
@@ -78,7 +78,7 @@ def validate_epoch(model, loader, criterion, device):
     running_loss, total_samples = 0.0, 0
     all_preds, all_targets = [], []
 
-    is_master = int(os.environ.get("LOCAL_RANK", 0)) == 0
+    is_master = int(os.environ.get("LOCAL_RANK", 0)) == 0  # noqa: PLW1508
     pbar = tqdm(loader, desc="Val  ", leave=False) if is_master else loader
 
     for images, targets, _ in pbar:
@@ -317,7 +317,7 @@ def run_training(cfg: Config):
         update_bn(train_loader, swa_model, device=device)
 
         # Валидация SWA модели
-        val_loss_swa, val_metrics_swa = validate_epoch(
+        _val_loss_swa, val_metrics_swa = validate_epoch(
             swa_model, val_loader, criterion, device
         )
         if is_master and val_metrics_swa:

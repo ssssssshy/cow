@@ -1,7 +1,6 @@
-from typing import Optional
 import torch
-import torch.nn as nn
 import torch.nn.functional as F
+from torch import nn
 
 
 class WingLoss(nn.Module):
@@ -53,7 +52,7 @@ class WeightedSmoothL1Loss(nn.Module):
         self,
         preds: torch.Tensor,
         targets: torch.Tensor,
-        sample_weights: Optional[torch.Tensor] = None,
+        sample_weights: torch.Tensor | None = None,
     ) -> torch.Tensor:
         loss = self.smooth_l1(preds, targets)
 
