@@ -11,7 +11,7 @@ class CowBCSModel(nn.Module):
 
     def __init__(
         self,
-        model_name: str = "convnext_small.fb_in22k_ft_in1k_384",
+        model_name: str = "vit_small_patch16_dinov3.lvd1689m",
         pretrained: bool = True,
         drop_rate: float = 0.4,
         init_bias: float = 2.88,

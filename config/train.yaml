@@ -6,7 +6,7 @@ data:
   target_noise: 0     # Чистые метки
 
 model:
-  name: "convnext_small.fb_in22k_ft_in1k_384" 
+  name: "vit_small_patch16_dinov3.lvd1689m" 
   pretrained: true
   drop_rate: 0.4      
   init_bias: 2.88  
