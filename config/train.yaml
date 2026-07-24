@@ -17,7 +17,7 @@ train:
   epochs: 50             # Даем чуть больше времени, раз он был хорош на 25-й
   lr: 5.0e-5           
   weight_decay: 0.05   
-  warmup_epochs: 0    
+  warmup_epochs: 5    
   patience: 10
   save_dir: "checkpoints"
   use_wandb: true
