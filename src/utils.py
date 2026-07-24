@@ -19,7 +19,7 @@ def set_seed(seed: int = 42):
 class EarlyStopping:
     """Ранняя остановка обучения, если метрика не улучшается."""
 
-    def __init__(self, patience: int = 5, min_delta: float = 0.0):
+    def __init__(self, patience: int = 7, min_delta: float = 0.005):
         self.patience = patience
         self.min_delta = min_delta
         self.counter = 0

@@ -152,10 +152,10 @@ class BCSMagneticLoss(nn.Module):
 
 
 def get_loss_function(
-    loss_name: str = "smooth_l1",
+    loss_name: str,
     beta: float = 0.1,
+    wing_w: float = 0.5,
     huber_delta: float = 0.05,
-    wing_omega: float = 0.5,
     wing_epsilon: float = 0.1,
     mag_weight: float = 0.05,  # Добавляем силу магнита
 ) -> nn.Module:
@@ -173,7 +173,7 @@ def get_loss_function(
     elif loss_name == "mse":
         return nn.MSELoss()
     elif loss_name == "wing":
-        return WingLoss(omega=wing_omega, epsilon=wing_epsilon)
+        return WingLoss(omega=wing_w, epsilon=wing_epsilon)
     elif loss_name == "weighted_smooth_l1":
         return WeightedSmoothL1Loss(beta=beta)
     elif loss_name == "ordinal":

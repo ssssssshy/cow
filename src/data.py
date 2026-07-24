@@ -37,8 +37,6 @@ def get_transforms(
     train_transform = A.Compose(
         [
             A.Resize(height=img_size[0], width=img_size[1]),
-            # 🔥 ДОБАВЛЕНО: Усиление контраста (CLAHE). Вытягивает тени впадин.
-            # clip_limit=2.0..4.0 — это порог ограничения контраста, чтобы не было шума.
             A.HorizontalFlip(p=0.5),
             A.Affine(
                 scale=(0.90, 1.10),
@@ -49,12 +47,7 @@ def get_transforms(
             A.ColorJitter(
                 brightness=0.25, contrast=0.25, saturation=0.2, hue=0.08, p=0.6
             ),
-            A.CoarseDropout(
-                num_holes_range=(3, 8),
-                hole_height_range=(16, 32),
-                hole_width_range=(16, 32),
-                p=0.5,
-            ),
+            A.PixelDropout(dropout_prob=0.05, per_channel=True, p=0.5),
             A.RandomGamma(gamma_limit=(75, 125), p=0.4),
             A.Normalize(
                 mean=(0.485, 0.456, 0.406),
@@ -67,8 +60,6 @@ def get_transforms(
     val_transform = A.Compose(
         [
             A.Resize(height=img_size[0], width=img_size[1]),
-            # 🔥 ДОБАВЛЕНО: CLAHE обязательно нужен и на валидации!
-            A.CLAHE(clip_limit=3.0, tile_grid_size=(8, 8), p=1.0),
             A.Normalize(
                 mean=(0.485, 0.456, 0.406),
                 std=(0.229, 0.224, 0.225),
@@ -211,14 +202,15 @@ class DistributedWeightedRandomSampler(torch.utils.data.Sampler):
         self.replacement = replacement
 
         # Считаем веса для каждого элемента датасета
-        targets = [sample["bcs_target"] for sample in dataset.samples]
-        counts = Counter(targets)
+        class_ids = [sample["class_id"] for sample in dataset.samples]
+        counts = Counter(class_ids)
+        weights = [1.0 / (counts[cid] ** 0.7) for cid in class_ids]
 
         # Обратная частота для балансировки (смягченная с помощью counts ** 0.7)
-        weights = [1.0 / (counts[t] ** 0.7) for t in targets]
+        weights = [1.0 / (counts[t] ** 0.7) for t in class_ids]
         self.weights = torch.as_tensor(weights, dtype=torch.double)
 
-        self.num_samples = len(targets)
+        self.num_samples = len(class_ids)
         # Округляем количество сэмплов на реплику, чтобы всем хватило поровну
         self.total_size = ceil(self.num_samples / self.num_replicas) * self.num_replicas
         self.num_samples_per_replica = self.total_size // self.num_replicas

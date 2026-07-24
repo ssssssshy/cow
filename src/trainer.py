@@ -161,15 +161,14 @@ def run_training(cfg: Config):
         target_noise=cfg.data.target_noise,
     )
 
-    model = CowBCSModel(
-        model_name=cfg.model.name,
-        pretrained=cfg.model.pretrained,
-        drop_rate=cfg.model.drop_rate,
-        init_bias=cfg.model.init_bias,
-    ).to(device)
+    model = CowBCSModel(cfg=cfg.model, img_size=tuple(cfg.data.img_size)).to(device)
 
     model = DDP(model, device_ids=[local_rank], output_device=local_rank)
-    criterion = get_loss_function(cfg.train.loss_name).to(device)
+    criterion = get_loss_function(
+        cfg.train.loss_name,
+        wing_w=cfg.train.wing_w,
+        wing_epsilon=cfg.train.wing_epsilon,
+    ).to(device)
 
     # Создаем 4 группы параметров (Backbone/Новые слои) x (С затуханием/Без затухания)
     backbone_decay = []
@@ -181,14 +180,12 @@ def run_training(cfg: Config):
         if not param.requires_grad:
             continue
 
-        # Поскольку модель обернута в DDP, имена начинаются с "module."
-        # (например, "module.backbone.layer1..." или "module.attention.se...")
-        is_backbone = "backbone" in name
+        # В timm голова обычно называется head, fc или classifier
+        is_head = "head" in name or "fc" in name or "classifier" in name
+        is_backbone = not is_head
 
-        # Отключаем WD для одномерных тензоров (LayerNorm, LayerScale, gamma) и всех смещений (bias)
         is_no_decay = param.ndim < 2 or name.endswith(".bias")
 
-        # Распределяем параметры по 4 корзинам
         if is_backbone:
             if is_no_decay:
                 backbone_no_decay.append(param)

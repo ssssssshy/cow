@@ -9,21 +9,26 @@ import torch
 from sklearn.metrics import confusion_matrix
 from tqdm import tqdm
 
-from src.config import load_config
+from models import CowBCSModel
+from src.config import ModelConfig, load_config
 from src.data import get_dataloaders
 from src.metrics import compute_all_metrics
-from src.models import CowBCSModel
 from src.utils import set_seed
 
 
 def load_model(cfg, model_path, device):
     """Загружает модель, очищая ключи DDP (префикс 'module.')."""
-    model = CowBCSModel(
-        model_name=cfg.model.name,
-        pretrained=False,
-        init_bias=cfg.model.init_bias,  # Не забываем про bias
-    ).to(device)
-
+    model_cfg = ModelConfig(
+        name="convnext_small.fb_in22k_ft_in1k_384",
+        pretrained=True,
+        freeze_backbone=False,
+        use_cls_token=False,
+        use_patch_tokens=False,
+        drop_rate=0.2,
+        init_bias=2.88,
+    )
+    cfg = load_config("config/train.yaml")
+    model = CowBCSModel(cfg.model, img_size=tuple(cfg.data.img_size)).to(device)
     if not Path(model_path).exists():
         raise FileNotFoundError(f"Чекпоинт не найден: {model_path}")
 
