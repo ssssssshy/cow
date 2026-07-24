@@ -171,29 +171,56 @@ def run_training(cfg: Config):
     model = DDP(model, device_ids=[local_rank], output_device=local_rank)
     criterion = get_loss_function(cfg.train.loss_name).to(device)
 
-    decay_params = []
-    no_decay_params = []
+    # Создаем 4 группы параметров (Backbone/Новые слои) x (С затуханием/Без затухания)
+    backbone_decay = []
+    backbone_no_decay = []
+    new_decay = []
+    new_no_decay = []
 
     for name, param in model.named_parameters():
         if not param.requires_grad:
             continue
 
-        # Отключаем WD для одномерных тензоров (LayerNorm, LayerScale) и всех смещений (bias)
-        if param.ndim < 2 or name.endswith(".bias"):
-            no_decay_params.append(param)
-        else:
-            # Применяем WD только к матрицам весов (Conv2d, Linear)
-            decay_params.append(param)
+        # Поскольку модель обернута в DDP, имена начинаются с "module."
+        # (например, "module.backbone.layer1..." или "module.attention.se...")
+        is_backbone = "backbone" in name
 
+        # Отключаем WD для одномерных тензоров (LayerNorm, LayerScale, gamma) и всех смещений (bias)
+        is_no_decay = param.ndim < 2 or name.endswith(".bias")
+
+        # Распределяем параметры по 4 корзинам
+        if is_backbone:
+            if is_no_decay:
+                backbone_no_decay.append(param)
+            else:
+                backbone_decay.append(param)
+        else:
+            if is_no_decay:
+                new_no_decay.append(param)
+            else:
+                new_decay.append(param)
+
+    # Собираем настройки оптимизатора
+    # Backbone получает базовый lr, а новые слои (attention, head) - в 10 раз больше!
     optimizer_grouped_parameters = [
-        {"params": decay_params, "weight_decay": cfg.train.weight_decay},
+        # --- Предобученный Backbone ---
         {
-            "params": no_decay_params,
-            "weight_decay": 0.0,  # Полностью отключаем штраф
+            "params": backbone_decay,
+            "weight_decay": cfg.train.weight_decay,
+            "lr": cfg.train.lr,
         },
+        {"params": backbone_no_decay, "weight_decay": 0.0, "lr": cfg.train.lr},
+        # --- Новые слои (Attention + Head) ---
+        {
+            "params": new_decay,
+            "weight_decay": cfg.train.weight_decay,
+            "lr": cfg.train.lr * 10,
+        },
+        {"params": new_no_decay, "weight_decay": 0.0, "lr": cfg.train.lr * 10},
     ]
 
-    optimizer = AdamW(optimizer_grouped_parameters, lr=cfg.train.lr)
+    # Инициализируем AdamW. Общий lr указывать не нужно, он задан внутри групп.
+    optimizer = AdamW(optimizer_grouped_parameters)
 
     warmup_scheduler = LinearLR(
         optimizer, start_factor=0.1, total_iters=cfg.train.warmup_epochs
