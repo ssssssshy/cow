@@ -78,7 +78,12 @@ class CowBCSDataset(Dataset):
         split: str = "train",
         img_size: tuple[int, int] = (384, 384),
         crop_bbox: bool = True,
-        bbox_padding: float = 0.1,
+        # --- НОВЫЕ ПАРАМЕТРЫ ДЛЯ ЖЕСТКОГО КРОПА ---
+        margin_left: float = 0.05,
+        margin_right: float = 0.05,
+        margin_top: float = 0.0,
+        margin_bottom: float = 0.30,
+        # ------------------------------------------
         transform: A.Compose | None = None,
         class_to_bcs: dict[int, float] | None = None,
         target_noise: float = 0.0,
@@ -87,7 +92,12 @@ class CowBCSDataset(Dataset):
         self.split = split
         self.img_size = img_size
         self.crop_bbox = crop_bbox
-        self.bbox_padding = bbox_padding
+
+        self.margin_left = margin_left
+        self.margin_right = margin_right
+        self.margin_top = margin_top
+        self.margin_bottom = margin_bottom
+
         self.transform = transform
         self.class_to_bcs = class_to_bcs or DEFAULT_CLASS_TO_BCS
         self.target_noise = target_noise
@@ -97,7 +107,7 @@ class CowBCSDataset(Dataset):
         self.samples = self._load_samples()
 
     def _load_samples(self) -> list[dict]:
-        # ... (rest of the method unchanged) ...
+        # (Остается без изменений)
         samples = []
         img_extensions = ("*.webp", "*.jpg", "*.jpeg", "*.png")
         img_files: list[Path] = []
@@ -145,14 +155,32 @@ class CowBCSDataset(Dataset):
 
         if self.crop_bbox:
             xc, yc, bw, bh = sample["bbox"]
-            pad_w = bw * self.bbox_padding
-            pad_h = bh * self.bbox_padding
 
-            xmin = max(0, int((xc - bw / 2 - pad_w) * w_img))
-            ymin = max(0, int((yc - bh / 2 - pad_h) * h_img))
-            xmax = min(w_img, int((xc + bw / 2 + pad_w) * w_img))
-            ymax = min(h_img, int((yc + bh / 2 + pad_h) * h_img))
-            image = image[ymin:ymax, xmin:xmax]
+            # --- НОВАЯ ЛОГИКА ВЫРЕЗАНИЯ (TIGHT CROP) ---
+            bw_px = bw * w_img
+            bh_px = bh * h_img
+
+            xmin = int((xc * w_img) - (bw_px / 2) + (bw_px * self.margin_left))
+            xmax = int((xc * w_img) + (bw_px / 2) - (bw_px * self.margin_right))
+            ymin = int((yc * h_img) - (bh_px / 2) + (bh_px * self.margin_top))
+            ymax = int((yc * h_img) + (bh_px / 2) - (bh_px * self.margin_bottom))
+
+            # Защита от выхода за границы картинки
+            xmin, ymin = max(0, xmin), max(0, ymin)
+            xmax, ymax = min(w_img, xmax), min(h_img, ymax)
+
+            # Защита от вырождения рамки (если отступы слишком большие)
+            if xmax > xmin and ymax > ymin:
+                image = image[ymin:ymax, xmin:xmax]
+            else:
+                # Если отступы "съели" всю картинку, берем оригинальный bbox YOLO без отступов
+                pad_w_orig = int((xc * w_img) - (bw_px / 2))
+                pad_h_orig = int((yc * h_img) - (bh_px / 2))
+                image = image[
+                    max(0, pad_h_orig) : min(h_img, int(pad_h_orig + bh_px)),
+                    max(0, pad_w_orig) : min(w_img, int(pad_w_orig + bw_px)),
+                ]
+            # -------------------------------------------
 
         if self.transform:
             augmented = self.transform(image=image)
@@ -165,12 +193,10 @@ class CowBCSDataset(Dataset):
 
         bcs_target_val = sample["bcs_target"]
 
-        # Добавляем Гауссов шум к таргету для защиты от шума разметки (только при обучении)
         if self.split == "train" and self.target_noise > 0:
             import numpy as np
 
             bcs_target_val += np.random.normal(0, self.target_noise)
-            # Ограничиваем таргет физическими рамками шкалы BCS
             bcs_target_val = np.clip(bcs_target_val, 1.0, 5.0)
 
         bcs_target = torch.tensor(bcs_target_val, dtype=torch.float32)
@@ -272,6 +298,7 @@ class MixupCollate:
 
 
 # --- Функция сборки DataLoaders ---
+# --- Функция сборки DataLoaders ---
 def get_dataloaders(
     data_dir,
     batch_size,
@@ -279,8 +306,13 @@ def get_dataloaders(
     crop_bbox=True,
     is_distributed=False,
     num_workers=4,
-    mixup_alpha=0.2,  # Параметр для контроля интенсивности Mixup
+    mixup_alpha=0.2,
     target_noise=0.0,
+    # --- НОВЫЕ ПАРАМЕТРЫ ПЕРЕДАЮТСЯ СЮДА ---
+    margin_left=0.05,
+    margin_right=0.05,
+    margin_top=0.0,
+    margin_bottom=0.30,
 ):
     train_tf, val_tf = get_transforms(img_size=img_size)
 
@@ -289,6 +321,10 @@ def get_dataloaders(
         split="train",
         img_size=img_size,
         crop_bbox=crop_bbox,
+        margin_left=margin_left,
+        margin_right=margin_right,
+        margin_top=margin_top,
+        margin_bottom=margin_bottom,
         transform=train_tf,
         target_noise=target_noise,
     )
@@ -297,14 +333,19 @@ def get_dataloaders(
         split="val",
         img_size=img_size,
         crop_bbox=crop_bbox,
+        margin_left=margin_left,
+        margin_right=margin_right,
+        margin_top=margin_top,
+        margin_bottom=margin_bottom,
         transform=val_tf,
     )
 
-    # Инициализируем Collate функцию для Mixup (применяем только к обучающей выборке)
+    # ... (весь остальной код функции get_dataloaders остается абсолютно без изменений) ...
+
+    # Инициализируем Collate функцию для Mixup...
     train_collate_fn = MixupCollate(alpha=mixup_alpha) if mixup_alpha > 0 else None
 
     if is_distributed:
-        # Используем наш гибридный семплер для DDP + балансировки классов
         train_sampler = DistributedWeightedRandomSampler(train_dataset)
         val_sampler = DistributedSampler(val_dataset, shuffle=False)
 
@@ -324,10 +365,8 @@ def get_dataloaders(
             pin_memory=True,
         )
     else:
-        # Для одиночной видеокарты используем стандартный WeightedRandomSampler
         targets = [sample["bcs_target"] for sample in train_dataset.samples]
         counts = Counter(targets)
-        # Смягчение весов (counts ** 0.7)
         sample_weights = [1.0 / (counts[t] ** 0.7) for t in targets]
 
         sampler = WeightedRandomSampler(
@@ -355,27 +394,27 @@ def get_dataloaders(
 
 # --- Quick Test ---
 if __name__ == "__main__":
-    import numpy as np
     import tempfile
-    
+
+    import numpy as np
+
     # Create dummy data structure
     with tempfile.TemporaryDirectory() as tmpdir:
         data_dir = Path(tmpdir)
         (data_dir / "images" / "train").mkdir(parents=True)
         (data_dir / "labels" / "train").mkdir(parents=True)
-        
+
         # Create a dummy image
         img_path = data_dir / "images" / "train" / "cow1.jpg"
         # Create a blank image 384x384
         dummy_img = np.zeros((384, 384, 3), dtype=np.uint8)
         cv2.imwrite(str(img_path), dummy_img)
-        
+
         # Create a dummy label
         with open(data_dir / "labels" / "train" / "cow1.txt", "w") as f:
-            f.write("8 0.5 0.5 0.2 0.2") # class 8 -> BCS 3.0
-            
+            f.write("8 0.5 0.5 0.2 0.2")  # class 8 -> BCS 3.0
+
         dataset = CowBCSDataset(data_dir=data_dir, split="train", crop_bbox=False)
         print(f"Dataset size: {len(dataset)}")
         img, bcs, cid = dataset[0]
         print(f"Image shape: {img.shape}, BCS: {bcs:.2f}, Class ID: {cid}")
-
