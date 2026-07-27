@@ -10,25 +10,19 @@ from sklearn.metrics import confusion_matrix
 from tqdm import tqdm
 
 from models import CowBCSModel
-from src.config import ModelConfig, load_config
-from src.data import get_dataloaders
+from src.config import load_config
+
+# Обязательно импортируйте get_test_dataloader из вашего data.py
+from src.data import get_test_dataloader
 from src.metrics import compute_all_metrics
 from src.utils import set_seed
 
 
 def load_model(cfg, model_path, device):
-    """Загружает модель, очищая ключи DDP (префикс 'module.')."""
-    model_cfg = ModelConfig(
-        name="convnext_small.fb_in22k_ft_in1k_384",
-        pretrained=True,
-        freeze_backbone=False,
-        use_cls_token=False,
-        use_patch_tokens=False,
-        drop_rate=0.2,
-        init_bias=2.88,
-    )
-    cfg = load_config("config/train.yaml")
+    """Загружает модель, используя настройки из конфига, и очищает ключи DDP."""
+    # Используем cfg.model вместо жестко заданных параметров
     model = CowBCSModel(cfg.model, img_size=tuple(cfg.data.img_size)).to(device)
+
     if not Path(model_path).exists():
         raise FileNotFoundError(f"Чекпоинт не найден: {model_path}")
 
@@ -55,7 +49,6 @@ def get_predictions(model, loader, device):
         with torch.amp.autocast(device_type="cuda"):
             preds = model(images)
 
-        # Обязательно "плющим" тензоры, чтобы они точно были 1D массивами
         all_preds.extend(preds.view(-1).cpu().numpy())
         all_targets.extend(targets.view(-1).cpu().numpy())
 
@@ -90,8 +83,6 @@ def plot_analysis(preds: np.ndarray, targets: np.ndarray, save_dir: Path):
     plt.close()
 
     # 2. Матрица ошибок (Confusion Matrix)
-    # Превращаем float-значения (1.0, 1.25 ...) в целые индексы от 0 до 16,
-    # так как sklearn категорически не принимает float для confusion_matrix.
     def bcs_to_idx(arr):
         return np.clip(np.round((arr - 1.0) / 0.25), 0, 16).astype(int)
 
@@ -133,7 +124,7 @@ def plot_analysis(preds: np.ndarray, targets: np.ndarray, save_dir: Path):
     plt.savefig(save_dir / "error_distribution.png", dpi=300, bbox_inches="tight")
     plt.close()
 
-    print(f"✅ Графики успешно сохранены в папку: {save_dir}")
+    print(f"Графики успешно сохранены в папку: {save_dir}")
 
 
 def mine_and_plot_hard_examples(
@@ -144,7 +135,6 @@ def mine_and_plot_hard_examples(
 
     results = []
     for idx in range(len(errors)):
-        # Берем метаданные из оригинального датасета (путь к картинке и т.д.)
         sample_meta = dataset.samples[idx]
         results.append(
             {
@@ -156,15 +146,12 @@ def mine_and_plot_hard_examples(
             }
         )
 
-    # Сортируем по убыванию ошибки
     df_hard = pd.DataFrame(results).sort_values(by="error", ascending=False).head(top_k)
 
-    # 1. Сохраняем в CSV
     csv_path = save_dir / "hard_examples_report.csv"
     df_hard.to_csv(csv_path, index=False)
-    print(f"✅ Отчет по ТОП-{top_k} сложным примерам сохранен в: {csv_path}")
+    print(f"Отчет по ТОП-{top_k} сложным примерам сохранен в: {csv_path}")
 
-    # 2. Рисуем сетку картинок (ТОП-16)
     num_to_plot = min(16, len(df_hard))
     if num_to_plot == 0:
         return
@@ -199,48 +186,50 @@ def mine_and_plot_hard_examples(
     plt.tight_layout()
     plt.savefig(plot_path, bbox_inches="tight", dpi=150)
     plt.close()
-    print(f"📸 Сетка проблемных изображений сохранена в: {plot_path}")
+    print(f"Сетка проблемных изображений сохранена в: {plot_path}")
 
 
 def main():
     cfg = load_config("config/train.yaml")
     set_seed(cfg.train.seed)
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    print(f"🔍 Запуск оценки на устройстве: {device}")
+    print(f"Запуск оценки на устройстве: {device}")
 
     model_path = Path(cfg.train.save_dir) / "best_bcs_model.pt"
     results_dir = Path("results")
     results_dir.mkdir(exist_ok=True, parents=True)
 
-    # 1. Загрузка данных (Используем только Val, DDP выключен! Shuffle по умолчанию выключен)
-    _, val_loader = get_dataloaders(
+    # 1. Загрузка данных (Используем get_test_dataloader)
+    test_loader = get_test_dataloader(
         data_dir=cfg.data.data_dir,
         batch_size=cfg.train.batch_size,
-        img_size=(cfg.data.img_size[0], cfg.data.img_size[1]),
+        img_size=tuple(cfg.data.img_size),
         crop_bbox=cfg.data.crop_bbox,
-        is_distributed=False,
         num_workers=cfg.data.num_workers,
+        margin_left=cfg.data.margin_left,
+        margin_right=cfg.data.margin_right,
+        margin_top=cfg.data.margin_top,
+        margin_bottom=cfg.data.margin_bottom,
     )
 
     # 2. Загрузка модели
     model = load_model(cfg, model_path, device)
 
     # 3. Инференс
-    preds, targets = get_predictions(model, val_loader, device)
+    preds, targets = get_predictions(model, test_loader, device)
 
     # 4. Расчет финальных метрик
     metrics = compute_all_metrics(torch.tensor(preds), torch.tensor(targets))
-    print("\n📊 Финальные метрики на валидации:")
+    print("\nФинальные метрики на тесте:")
     for k, v in metrics.items():
         print(f"  - {k}: {v:.4f}")
 
-    # 5. Отрисовка базовых графиков (Матрица ошибок, гистограмма)
+    # 5. Отрисовка базовых графиков
     plot_analysis(preds, targets, results_dir)
 
-    # 6. Анализ "Hard Examples" (Майнинг сложных примеров)
-    # Передаем val_loader.dataset, чтобы извлечь пути к оригинальным изображениям
+    # 6. Анализ "Hard Examples"
     mine_and_plot_hard_examples(
-        preds, targets, val_loader.dataset, results_dir, top_k=50
+        preds, targets, test_loader.dataset, results_dir, top_k=50
     )
 
 

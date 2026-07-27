@@ -297,7 +297,43 @@ class MixupCollate:
         return mixed_images, mixed_targets, class_ids
 
 
-# --- Функция сборки DataLoaders ---
+def get_test_dataloader(
+    data_dir,
+    batch_size,
+    img_size,
+    crop_bbox=True,
+    num_workers=4,
+    margin_left=0.05,
+    margin_right=0.05,
+    margin_top=0.0,
+    margin_bottom=0.30,
+):
+    # Нам нужны только валидационные трансформации (без искажений)
+    _, val_tf = get_transforms(img_size=img_size)
+
+    test_dataset = CowBCSDataset(
+        data_dir=data_dir,
+        split="test",  # Указываем папку test
+        img_size=img_size,
+        crop_bbox=crop_bbox,
+        margin_left=margin_left,
+        margin_right=margin_right,
+        margin_top=margin_top,
+        margin_bottom=margin_bottom,
+        transform=val_tf,
+    )
+
+    test_loader = DataLoader(
+        test_dataset,
+        batch_size=batch_size,
+        shuffle=False,  # Тестовый датасет перемешивать не нужно
+        num_workers=num_workers,
+        pin_memory=True,
+    )
+
+    return test_loader
+
+
 # --- Функция сборки DataLoaders ---
 def get_dataloaders(
     data_dir,
