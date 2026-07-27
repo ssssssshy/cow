@@ -18,3 +18,4 @@ new.txt
 effnetrun1.pt
 results/
 yolo26m_size_640_v1.pt
+yolo26m-seg.pt

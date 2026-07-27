@@ -119,7 +119,7 @@ def main():
     assert isinstance(layer_container, nn.Sequential)
 
     # Берем предпоследний слой из оригинальной YOLO
-    target_layers = [layer_container[-2]]
+    target_layers = [layer_container[15], layer_container[18], layer_container[21]]
 
     # Передаем в EigenCAM нашу ОБЕРНУТУЮ модель
     cam = EigenCAM(model=wrapped_model, target_layers=target_layers)
