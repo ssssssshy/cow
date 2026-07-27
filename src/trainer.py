@@ -95,7 +95,7 @@ def validate_epoch(model, loader, criterion, device):
         all_preds.append(preds)
         all_targets.append(targets)
 
-    # 🔥 Синхронизируем running_loss и total_samples между всеми GPU для честного Val Loss
+    # Синхронизируем running_loss и total_samples между всеми GPU
     stats_tensor = torch.tensor([running_loss, float(total_samples)], device=device)
     dist.all_reduce(stats_tensor, op=dist.ReduceOp.SUM)
     global_val_loss = stats_tensor[0].item() / stats_tensor[1].item()
@@ -161,7 +161,10 @@ def run_training(cfg: Config):
         target_noise=cfg.data.target_noise,
     )
 
-    model = CowBCSModel(cfg=cfg.model, img_size=tuple(cfg.data.img_size)).to(device)
+    model = CowBCSModel(
+        cfg=cfg.model,
+        img_size=(cfg.data.img_size[0], cfg.data.img_size[1]),
+    ).to(device)
 
     model = DDP(model, device_ids=[local_rank], output_device=local_rank)
     criterion = get_loss_function(
@@ -180,7 +183,6 @@ def run_training(cfg: Config):
         if not param.requires_grad:
             continue
 
-        # В timm голова обычно называется head, fc или classifier
         is_head = "head" in name or "fc" in name or "classifier" in name
         is_backbone = not is_head
 
@@ -197,17 +199,13 @@ def run_training(cfg: Config):
             else:
                 new_decay.append(param)
 
-    # Собираем настройки оптимизатора
-    # Backbone получает базовый lr, а новые слои (attention, head) - в 10 раз больше!
     optimizer_grouped_parameters = [
-        # --- Предобученный Backbone ---
         {
             "params": backbone_decay,
             "weight_decay": cfg.train.weight_decay,
             "lr": cfg.train.lr,
         },
         {"params": backbone_no_decay, "weight_decay": 0.0, "lr": cfg.train.lr},
-        # --- Новые слои (Attention + Head) ---
         {
             "params": new_decay,
             "weight_decay": cfg.train.weight_decay,
@@ -216,7 +214,6 @@ def run_training(cfg: Config):
         {"params": new_no_decay, "weight_decay": 0.0, "lr": cfg.train.lr * 10},
     ]
 
-    # Инициализируем AdamW. Общий lr указывать не нужно, он задан внутри групп.
     optimizer = AdamW(optimizer_grouped_parameters)
 
     warmup_scheduler = LinearLR(
@@ -234,9 +231,9 @@ def run_training(cfg: Config):
     scaler = torch.amp.GradScaler("cuda")
     early_stopping = EarlyStopping(patience=cfg.train.patience)
 
-    # 🔥 Инициализация SWA
+    # Инициализация SWA
     if cfg.train.use_swa:
-        swa_model = AveragedModel(model)
+        swa_model = AveragedModel(model.module)
         swa_scheduler = SWALR(optimizer, swa_lr=cfg.train.swa_lr)
 
     best_val_mae = float("inf")
@@ -256,17 +253,17 @@ def run_training(cfg: Config):
         )
         val_loss, val_metrics = validate_epoch(model, val_loader, criterion, device)
 
-        # Вытаскиваем MAE для Early Stopping
         val_mae = val_metrics["mae"]
 
         # Шаг планировщика (обычный или SWA)
         if cfg.train.use_swa and epoch >= cfg.train.swa_start:
-            swa_model.update_parameters(model)
+            swa_model.update_parameters(
+                model.module
+            )  # Безопаснее передавать model.module
             swa_scheduler.step()
         else:
             scheduler.step()
 
-        # 🔥 ТЕПЕРЬ СЛЕДИМ ЗА MAE, А НЕ ЗА LOSS
         early_stopping(val_mae)
 
         if is_master:
@@ -307,13 +304,12 @@ def run_training(cfg: Config):
                 print("🛑 Сработал Early Stopping! Обучение остановлено.")
             break
 
-    # 🔥 Финализация SWA (обновление BatchNorm)
+    # Финализация SWA (обновление BatchNorm)
     if cfg.train.use_swa:
         if is_master:
             print("🔄 Финализация SWA: Обновление статистики BatchNorm...")
         update_bn(train_loader, swa_model, device=device)
 
-        # Валидация SWA модели
         _val_loss_swa, val_metrics_swa = validate_epoch(
             swa_model, val_loader, criterion, device
         )

@@ -351,3 +351,31 @@ def get_dataloaders(
         )
 
     return train_loader, val_loader
+
+
+# --- Quick Test ---
+if __name__ == "__main__":
+    import numpy as np
+    import tempfile
+    
+    # Create dummy data structure
+    with tempfile.TemporaryDirectory() as tmpdir:
+        data_dir = Path(tmpdir)
+        (data_dir / "images" / "train").mkdir(parents=True)
+        (data_dir / "labels" / "train").mkdir(parents=True)
+        
+        # Create a dummy image
+        img_path = data_dir / "images" / "train" / "cow1.jpg"
+        # Create a blank image 384x384
+        dummy_img = np.zeros((384, 384, 3), dtype=np.uint8)
+        cv2.imwrite(str(img_path), dummy_img)
+        
+        # Create a dummy label
+        with open(data_dir / "labels" / "train" / "cow1.txt", "w") as f:
+            f.write("8 0.5 0.5 0.2 0.2") # class 8 -> BCS 3.0
+            
+        dataset = CowBCSDataset(data_dir=data_dir, split="train", crop_bbox=False)
+        print(f"Dataset size: {len(dataset)}")
+        img, bcs, cid = dataset[0]
+        print(f"Image shape: {img.shape}, BCS: {bcs:.2f}, Class ID: {cid}")
+

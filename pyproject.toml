@@ -6,6 +6,7 @@ readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
     "albumentations>=2.0.8",
+    "grad-cam>=1.5.5",
     "ipykernel>=7.3.0",
     "matplotlib>=3.11.1",
     "numpy>=2.5.1",
@@ -19,5 +20,6 @@ dependencies = [
     "timm>=1.0.28",
     "torch>=2.13.0",
     "tqdm>=4.69.0",
+    "ultralytics>=8.4.107",
     "wandb>=0.28.1",
 ]

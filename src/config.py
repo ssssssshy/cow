@@ -8,7 +8,7 @@ from omegaconf import OmegaConf
 @dataclass
 class DataConfig:
     data_dir: str = "data/raw"
-    img_size: list[int] = field(default_factory=lambda: [384, 384])
+    img_size: tuple[int, int] = (384, 384)  # <--- Поменяли list на tuple
     crop_bbox: bool = True
     bbox_pad: float = 0.05  # <-- Добавлено
     num_workers: int = 4

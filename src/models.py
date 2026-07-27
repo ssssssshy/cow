@@ -1,22 +1,9 @@
-from dataclasses import dataclass
-
 import timm
 import torch
 from torch import nn
 
-
-@dataclass
-class ModelConfig:
-    """Временный конфиг для тестирования (в реальном коде импортируйте из config.py)"""
-
-    name: str = "vit_small_patch16_dinov3.lvd1689m"
-    pretrained: bool = True
-    freeze_backbone: bool = False
-    use_cls_token: bool = True
-    use_patch_tokens: bool = True
-    patch_pool: str = "avg"  # "avg" или "max"
-    drop_rate: float = 0.3
-    init_bias: float | str = 2.88
+# Импортируем единый конфиг проекта, а не пишем его заново
+from src.config import ModelConfig
 
 
 class CowBCSModel(nn.Module):
@@ -55,7 +42,7 @@ class CowBCSModel(nn.Module):
         with torch.no_grad():
             dummy_input = torch.randn(1, 3, img_size[0], img_size[1])
             # Явно вызываем forward_features, а не __call__
-            dummy_features = self.backbone.forward_features(dummy_input)
+            dummy_features = self.backbone.forward_features(dummy_input)  # type: ignore
 
         # Определяем in_features в зависимости от архитектуры
         self.global_pool: nn.Module
@@ -119,7 +106,7 @@ class CowBCSModel(nn.Module):
         # Если backbone заморожен, отключаем градиенты для ускорения
         with torch.set_grad_enabled(not self.freeze_backbone):
             # Явно вызываем forward_features вместо __call__
-            features = self.backbone.forward_features(x)
+            features = self.backbone.forward_features(x)  # type: ignore
 
         # Пулинг в зависимости от архитектуры
         if self.is_vit and features.ndim == 3:
